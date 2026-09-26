@@ -1,0 +1,158 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum UserRole {
+  INSPECTOR
+  MECHANIC
+  ADMIN
+}
+
+enum VehicleStatus {
+  OK
+  ALERT
+  CRITICAL
+}
+
+enum DtcType {
+  CONFIRMED
+  PENDING
+  PERMANENT
+}
+
+enum MonitorStatus {
+  COMPLETED
+  NOT_COMPLETED
+  UNKNOWN
+}
+
+enum ScanSeverity {
+  NONE
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+enum WorkOrderStatus {
+  OPEN
+  IN_PROGRESS
+  COMPLETED
+  CANCELLED
+}
+
+enum WorkOrderPriority {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+model User {
+  id           String    @id @default(uuid())
+  email        String    @unique
+  passwordHash String
+  name         String
+  role         UserRole  @default(INSPECTOR)
+  createdAt    DateTime  @default(now())
+
+  scans        Scan[]
+  workOrders   WorkOrder[] @relation("AssignedTo")
+
+  @@map("users")
+}
+
+model Vehicle {
+  id        String        @id @default(uuid())
+  vin       String?       @unique
+  plate     String        @unique
+  alias     String?
+  make      String?
+  model     String?
+  year      Int?
+  status    VehicleStatus @default(OK)
+  createdAt DateTime      @default(now())
+
+  scans      Scan[]
+  workOrders WorkOrder[]
+
+  @@map("vehicles")
+}
+
+model Scan {
+  id             String       @id @default(uuid())
+  vehicleId      String
+  scannedById    String
+  batteryVoltage Float?
+  scannedAt      DateTime
+  rawPayload     Json?
+  severity       ScanSeverity @default(NONE)
+  aiProcessed    Boolean      @default(false)
+  createdAt      DateTime     @default(now())
+
+  vehicle    Vehicle    @relation(fields: [vehicleId], references: [id])
+  scannedBy  User       @relation(fields: [scannedById], references: [id])
+  dtcEntries DtcEntry[]
+  diagnosis  Diagnosis?
+  workOrder  WorkOrder?
+
+  @@map("scans")
+}
+
+model DtcEntry {
+  id            String        @id @default(uuid())
+  scanId        String
+  code          String
+  type          DtcType
+  monitorStatus MonitorStatus @default(UNKNOWN)
+
+  scan Scan @relation(fields: [scanId], references: [id])
+
+  @@map("dtc_entries")
+}
+
+model Diagnosis {
+  id              String   @id @default(uuid())
+  scanId          String   @unique
+  provider        String
+  prompt          String
+  response        String
+  summary         String
+  severity        String
+  recommendations Json
+  tokensUsed      Int?
+  latencyMs       Int?
+  createdAt       DateTime @default(now())
+
+  scan      Scan       @relation(fields: [scanId], references: [id])
+  workOrder WorkOrder?
+
+  @@map("diagnoses")
+}
+
+model WorkOrder {
+  id           String            @id @default(uuid())
+  scanId       String            @unique
+  diagnosisId  String?           @unique
+  vehicleId    String
+  assignedToId String?
+  status       WorkOrderStatus   @default(OPEN)
+  priority     WorkOrderPriority @default(MEDIUM)
+  description  String
+  notes        String?
+  n8nNotified  Boolean           @default(false)
+  createdAt    DateTime          @default(now())
+  updatedAt    DateTime          @updatedAt
+
+  scan       Scan       @relation(fields: [scanId], references: [id])
+  diagnosis  Diagnosis? @relation(fields: [diagnosisId], references: [id])
+  vehicle    Vehicle    @relation(fields: [vehicleId], references: [id])
+  assignedTo User?      @relation("AssignedTo", fields: [assignedToId], references: [id])
+
+  @@map("work_orders")
+}
