@@ -3,7 +3,23 @@ import { PrismaService } from '../prisma/prisma.service';
 
 @Injectable()
 export class WorkOrdersService {
-  constructor(private prisma: PrismaService) {}
+  constructor(private readonly prisma: PrismaService) {}
 
-  // TODO: Implement in Phase 3
+  async findAll() {
+    return this.prisma.workOrder.findMany({
+      orderBy: { createdAt: 'desc' },
+      include: {
+        vehicle: true,
+        diagnosis: true,
+        scan: {
+          include: {
+            dtcEntries: true,
+          },
+        },
+        assignedTo: {
+          select: { id: true, name: true, email: true, role: true },
+        },
+      },
+    });
+  }
 }

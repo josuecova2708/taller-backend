@@ -1,9 +1,24 @@
-import { Controller } from '@nestjs/common';
+import { Controller, Get, Post, Body, Param, Req } from '@nestjs/common';
 import { ScansService } from './scans.service';
+import { CreateScanDto } from './dto/create-scan.dto';
 
 @Controller('scans')
 export class ScansController {
-  constructor(private scansService: ScansService) {}
+  constructor(private readonly scansService: ScansService) {}
 
-  // TODO: Implement POST /scans in Phase 2
+  @Get()
+  findAll() {
+    return this.scansService.findAll();
+  }
+
+  @Get(':id')
+  findOne(@Param('id') id: string) {
+    return this.scansService.findOne(id);
+  }
+
+  @Post()
+  create(@Body() dto: CreateScanDto, @Req() req: any) {
+    const userId = req.user?.sub;
+    return this.scansService.create(dto, userId);
+  }
 }

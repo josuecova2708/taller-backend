@@ -1,6 +1,5 @@
 generator client {
-  provider        = "prisma-client-js"
-  previewFeatures = ["driverAdapters"]
+  provider = "prisma-client-js"
 }
 
 datasource db {
@@ -24,12 +23,6 @@ enum DtcType {
   CONFIRMED
   PENDING
   PERMANENT
-}
-
-enum MonitorStatus {
-  COMPLETED
-  NOT_COMPLETED
-  UNKNOWN
 }
 
 enum ScanSeverity {
@@ -86,17 +79,19 @@ model Vehicle {
 }
 
 model Scan {
-  id             String       @id @default(uuid())
-  vehicleId      String
-  scannedById    String
-  batteryVoltage Float?
-  scannedAt      DateTime
-  rawPayload     Json?
-  severity       ScanSeverity @default(NONE)
-  aiProcessed    Boolean      @default(false)
-  createdAt      DateTime     @default(now())
+  id              String       @id @default(uuid())
+  vehicleId       String
+  scannedById     String
+  batteryVoltage  Float?
+  scannedAt       DateTime
+  rawPayload      Json?
+  readinessStatus Json?
+  notes           String?
+  severity        ScanSeverity @default(NONE)
+  aiProcessed     Boolean      @default(false)
+  createdAt       DateTime     @default(now())
 
-  vehicle    Vehicle    @relation(fields: [vehicleId], references: [id])
+  vehicle    Vehicle    @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
   scannedBy  User       @relation(fields: [scannedById], references: [id])
   dtcEntries DtcEntry[]
   diagnosis  Diagnosis?
@@ -106,13 +101,12 @@ model Scan {
 }
 
 model DtcEntry {
-  id            String        @id @default(uuid())
-  scanId        String
-  code          String
-  type          DtcType
-  monitorStatus MonitorStatus @default(UNKNOWN)
+  id     String  @id @default(uuid())
+  scanId String
+  code   String
+  type   DtcType
 
-  scan Scan @relation(fields: [scanId], references: [id])
+  scan Scan @relation(fields: [scanId], references: [id], onDelete: Cascade)
 
   @@map("dtc_entries")
 }
@@ -130,7 +124,7 @@ model Diagnosis {
   latencyMs       Int?
   createdAt       DateTime @default(now())
 
-  scan      Scan       @relation(fields: [scanId], references: [id])
+  scan      Scan       @relation(fields: [scanId], references: [id], onDelete: Cascade)
   workOrder WorkOrder?
 
   @@map("diagnoses")
@@ -150,9 +144,9 @@ model WorkOrder {
   createdAt    DateTime          @default(now())
   updatedAt    DateTime          @updatedAt
 
-  scan       Scan       @relation(fields: [scanId], references: [id])
-  diagnosis  Diagnosis? @relation(fields: [diagnosisId], references: [id])
-  vehicle    Vehicle    @relation(fields: [vehicleId], references: [id])
+  scan       Scan       @relation(fields: [scanId], references: [id], onDelete: Cascade)
+  diagnosis  Diagnosis? @relation(fields: [diagnosisId], references: [id], onDelete: SetNull)
+  vehicle    Vehicle    @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
   assignedTo User?      @relation("AssignedTo", fields: [assignedToId], references: [id])
 
   @@map("work_orders")

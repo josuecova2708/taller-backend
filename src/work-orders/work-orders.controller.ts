@@ -1,9 +1,12 @@
-import { Controller } from '@nestjs/common';
+import { Controller, Get } from '@nestjs/common';
 import { WorkOrdersService } from './work-orders.service';
 
 @Controller('work-orders')
 export class WorkOrdersController {
-  constructor(private workOrdersService: WorkOrdersService) {}
+  constructor(private readonly workOrdersService: WorkOrdersService) {}
 
-  // TODO: Implement in Phase 3
+  @Get()
+  findAll() {
+    return this.workOrdersService.findAll();
+  }
 }

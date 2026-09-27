@@ -1,7 +1,7 @@
 import 'dotenv/config';
 import * as fs from 'fs';
 import * as path from 'path';
-import { PrismaClient, UserRole, VehicleStatus, DtcType, MonitorStatus, ScanSeverity, WorkOrderStatus, WorkOrderPriority } from '@prisma/client';
+import { PrismaClient, UserRole, VehicleStatus, DtcType, ScanSeverity, WorkOrderStatus, WorkOrderPriority } from '@prisma/client';
 import { PrismaNeon } from '@prisma/adapter-neon';
 import { Pool, neonConfig } from '@neondatabase/serverless';
 import WebSocket from 'ws';
@@ -15,7 +15,7 @@ const adapter = new PrismaNeon({ connectionString });
 const prisma = new PrismaClient({ adapter } as any);
 
 async function ensureSchema() {
-  console.log('📦 Verificando tablas en Neon PostgreSQL (vía puerto 443)...');
+  console.log('📦 Verificando esquema en Neon PostgreSQL (vía puerto 443)...');
   const check = await pool.query(`
     SELECT EXISTS (
       SELECT FROM information_schema.tables 
@@ -28,16 +28,22 @@ async function ensureSchema() {
     const sqlPath = path.join(__dirname, 'migrations', '20260926000000_init', 'migration.sql');
     const sql = fs.readFileSync(sqlPath, 'utf8').replace(/^\uFEFF/, '');
     await pool.query(sql);
-    console.log('✅ Tablas e índices creados correctamente en Neon.');
-  } else {
-    console.log('✅ El esquema ya existe en Neon.');
   }
+
+  // Asegurar migración de Fase 2 (readinessStatus global en Scan, eliminar monitorStatus por DTC)
+  await pool.query(`
+    ALTER TABLE "scans" ADD COLUMN IF NOT EXISTS "readinessStatus" JSONB;
+    ALTER TABLE "scans" ADD COLUMN IF NOT EXISTS "notes" TEXT;
+    ALTER TABLE "dtc_entries" DROP COLUMN IF EXISTS "monitorStatus";
+    DROP TYPE IF EXISTS "MonitorStatus";
+  `);
+  console.log('✅ Esquema sincronizado correctamente en Neon.');
 }
 
 async function main() {
   await ensureSchema();
 
-  console.log('🌱 Iniciando seed de datos de prueba...');
+  console.log('🌱 Sembrando datos de prueba en Neon...');
 
   const passwordHash = await bcrypt.hash('taller123', 10);
 
@@ -75,10 +81,10 @@ async function main() {
     },
   });
 
-  // 2. Vehículos de prueba (incluyendo Toyota Tacoma real de pruebas)
+  // 2. Vehículos de prueba
   const tacoma = await prisma.vehicle.upsert({
     where: { plate: '5521-TAC' },
-    update: {},
+    update: { status: VehicleStatus.CRITICAL },
     create: {
       vin: '5TFCZ5AN3MX255216',
       plate: '5521-TAC',
@@ -92,7 +98,7 @@ async function main() {
 
   const hilux = await prisma.vehicle.upsert({
     where: { plate: '4012-UAG' },
-    update: {},
+    update: { status: VehicleStatus.ALERT },
     create: {
       vin: '8AJBA3CD201928374',
       plate: '4012-UAG',
@@ -106,7 +112,7 @@ async function main() {
 
   const coaster = await prisma.vehicle.upsert({
     where: { plate: '3110-BUS' },
-    update: {},
+    update: { status: VehicleStatus.ALERT },
     create: {
       vin: 'JTGFB518701122334',
       plate: '3110-BUS',
@@ -114,74 +120,122 @@ async function main() {
       make: 'Toyota',
       model: 'Hiace',
       year: 2020,
-      status: VehicleStatus.OK,
+      status: VehicleStatus.ALERT,
     },
   });
 
-  // 3. Escaneo de prueba (Datos reales de la Tacoma) si no existe
-  const existingScans = await prisma.scan.count({ where: { vehicleId: tacoma.id } });
-  if (existingScans === 0) {
-    const scanTacoma = await prisma.scan.create({
-      data: {
-        vehicleId: tacoma.id,
-        scannedById: inspector.id,
+  // Limpiar escaneos previos para recrear con readinessStatus global limpio
+  await prisma.workOrder.deleteMany({});
+  await prisma.diagnosis.deleteMany({});
+  await prisma.dtcEntry.deleteMany({});
+  await prisma.scan.deleteMany({});
+
+  // 3. Caso 1: Escaneo de la Toyota Tacoma (Falla recurrente P0300/P0301)
+  const scanTacoma = await prisma.scan.create({
+    data: {
+      vehicleId: tacoma.id,
+      scannedById: inspector.id,
+      batteryVoltage: 13.3,
+      scannedAt: new Date(),
+      severity: ScanSeverity.HIGH,
+      aiProcessed: true,
+      notes: 'Inspección previa a viaje de prácticas a Okinawa.',
+      readinessStatus: {
+        milOn: true,
+        dtcCount: 2,
+        monitorsCompleted: true,
+        incompleteMonitors: [],
+        rawHex: '41 01 82 07 65 00',
+      },
+      rawPayload: {
+        vin: '5TFCZ5AN3MX255216',
         batteryVoltage: 13.3,
-        scannedAt: new Date(),
-        severity: ScanSeverity.HIGH,
-        aiProcessed: true,
-        rawPayload: {
-          vin: '5TFCZ5AN3MX255216',
-          batteryVoltage: 13.3,
-          dtcs: [
-            { code: 'P0300', type: 'PERMANENT', monitorStatus: 'COMPLETED' },
-            { code: 'P0301', type: 'PERMANENT', monitorStatus: 'COMPLETED' },
-            { code: 'P2195', type: 'PENDING', monitorStatus: 'NOT_COMPLETED' },
-          ],
-        },
-        dtcEntries: {
-          create: [
-            { code: 'P0300', type: DtcType.PERMANENT, monitorStatus: MonitorStatus.COMPLETED },
-            { code: 'P0301', type: DtcType.PERMANENT, monitorStatus: MonitorStatus.COMPLETED },
-            { code: 'P2195', type: DtcType.PENDING, monitorStatus: MonitorStatus.NOT_COMPLETED },
-          ],
-        },
-      },
-    });
-
-    const diagnosisTacoma = await prisma.diagnosis.create({
-      data: {
-        scanId: scanTacoma.id,
-        provider: 'gemini',
-        prompt: 'Analizar DTCs P0300 (PERMANENT), P0301 (PERMANENT), P2195 (PENDING, NOT_COMPLETED) para Toyota Tacoma 2021',
-        response: 'Falla de encendido detectada en cilindro 1 con historial permanente.',
-        summary: 'Fallo de encendido en el cilindro 1 (P0301) acompañado de código de fallo aleatorio (P0300). El código P2195 tiene monitor incompleto tras reinicio reciente.',
-        severity: 'HIGH',
-        recommendations: [
-          'Inspeccionar y reemplazar bujía del cilindro 1 si presenta desgaste',
-          'Verificar bobina de encendido del cilindro 1 intercambiándola con otro cilindro',
-          'Revisar compresión y cableado del inyector del cilindro 1',
+        readiness: '41 01 82 07 65 00',
+        dtcs: [
+          { code: 'P0300', type: 'CONFIRMED' },
+          { code: 'P0301', type: 'CONFIRMED' },
+          { code: 'P0300', type: 'PERMANENT' },
+          { code: 'P0301', type: 'PERMANENT' },
         ],
-        tokensUsed: 420,
-        latencyMs: 1450,
       },
-    });
-
-    await prisma.workOrder.create({
-      data: {
-        scanId: scanTacoma.id,
-        diagnosisId: diagnosisTacoma.id,
-        vehicleId: tacoma.id,
-        assignedToId: mechanic.id,
-        status: WorkOrderStatus.OPEN,
-        priority: WorkOrderPriority.HIGH,
-        description: 'Revisión urgente de sistema de encendido cilindro 1 (P0300 / P0301)',
-        notes: 'Generada automáticamente tras escaneo OBD-II.',
-        n8nNotified: true,
+      dtcEntries: {
+        create: [
+          { code: 'P0300', type: DtcType.CONFIRMED },
+          { code: 'P0301', type: DtcType.CONFIRMED },
+          { code: 'P0300', type: DtcType.PERMANENT },
+          { code: 'P0301', type: DtcType.PERMANENT },
+        ],
       },
-    });
-  }
+    },
+  });
 
-  console.log('✅ Seed completado exitosamente en Neon:', {
+  const diagnosisTacoma = await prisma.diagnosis.create({
+    data: {
+      scanId: scanTacoma.id,
+      provider: 'claude',
+      prompt: 'Analizar DTCs P0300 (CONFIRMED/PERMANENT), P0301 (CONFIRMED/PERMANENT) con monitores completos para Toyota Tacoma 2021',
+      response: 'Hipótesis técnica: fallo de encendido activo y recurrente focalizado en cilindro 1.',
+      summary: 'Hipótesis técnica: Se detectan códigos confirmados y permanentes de fallo de encendido en cilindro 1 (P0301) y aleatorio (P0300) con monitores completados. Requiere evaluación mecánica antes de autorizar salida a campo.',
+      severity: 'HIGH',
+      recommendations: [
+        'Hipótesis 1: Evaluar estado de bujía y bobina de encendido del cilindro 1',
+        'Hipótesis 2: Verificar cableado y pulso del inyector del cilindro 1',
+        'Decisión formal sujeta a validación del responsable técnico de taller',
+      ],
+      tokensUsed: 410,
+      latencyMs: 1320,
+    },
+  });
+
+  await prisma.workOrder.create({
+    data: {
+      scanId: scanTacoma.id,
+      diagnosisId: diagnosisTacoma.id,
+      vehicleId: tacoma.id,
+      assignedToId: mechanic.id,
+      status: WorkOrderStatus.OPEN,
+      priority: WorkOrderPriority.HIGH,
+      description: 'Evaluación mecánica prioritaria de sistema de encendido cilindro 1 (P0300 / P0301)',
+      notes: 'Hipótesis generada por asistente IA. Requiere validación humana antes de autorizar viaje.',
+      n8nNotified: true,
+    },
+  });
+
+  // 4. Caso 2: Minibús tras desconexión de batería (P2195 Pending + Monitores incompletos -> Seguimiento)
+  await prisma.scan.create({
+    data: {
+      vehicleId: coaster.id,
+      scannedById: inspector.id,
+      batteryVoltage: 12.6,
+      scannedAt: new Date(Date.now() - 3600 * 1000),
+      severity: ScanSeverity.LOW,
+      aiProcessed: false,
+      notes: 'Batería desconectada en taller el fin de semana para limpieza de bornes. Re-escanear tras completar ciclo de conducción.',
+      readinessStatus: {
+        milOn: false,
+        dtcCount: 0,
+        monitorsCompleted: false,
+        incompleteMonitors: ['Catalizador', 'Sensor de Oxígeno', 'EVAP'],
+        rawHex: '41 01 00 07 65 25',
+        batteryResetSuspected: true,
+      },
+      rawPayload: {
+        vin: 'JTGFB518701122334',
+        batteryVoltage: 12.6,
+        readiness: '41 01 00 07 65 25',
+        dtcs: [
+          { code: 'P2195', type: 'PENDING' },
+        ],
+      },
+      dtcEntries: {
+        create: [
+          { code: 'P2195', type: DtcType.PENDING },
+        ],
+      },
+    },
+  });
+
+  console.log('✅ Seed actualizado exitosamente en Neon:', {
     users: [admin.email, inspector.email, mechanic.email],
     vehicles: [tacoma.plate, hilux.plate, coaster.plate],
   });
