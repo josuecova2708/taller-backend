@@ -1,9 +1,42 @@
+import 'dotenv/config';
+import * as fs from 'fs';
+import * as path from 'path';
 import { PrismaClient, UserRole, VehicleStatus, DtcType, MonitorStatus, ScanSeverity, WorkOrderStatus, WorkOrderPriority } from '@prisma/client';
+import { PrismaNeon } from '@prisma/adapter-neon';
+import { Pool, neonConfig } from '@neondatabase/serverless';
+import WebSocket from 'ws';
 import * as bcrypt from 'bcrypt';
 
-const prisma = new PrismaClient();
+neonConfig.webSocketConstructor = WebSocket as any;
+
+const connectionString = process.env.DATABASE_URL || '';
+const pool = new Pool({ connectionString });
+const adapter = new PrismaNeon({ connectionString });
+const prisma = new PrismaClient({ adapter } as any);
+
+async function ensureSchema() {
+  console.log('📦 Verificando tablas en Neon PostgreSQL (vía puerto 443)...');
+  const check = await pool.query(`
+    SELECT EXISTS (
+      SELECT FROM information_schema.tables 
+      WHERE table_schema = 'public' AND table_name = 'users'
+    );
+  `);
+
+  if (!check.rows[0].exists) {
+    console.log('🛠️ Aplicando migración inicial (migration.sql) vía WebSocket 443...');
+    const sqlPath = path.join(__dirname, 'migrations', '20260926000000_init', 'migration.sql');
+    const sql = fs.readFileSync(sqlPath, 'utf8').replace(/^\uFEFF/, '');
+    await pool.query(sql);
+    console.log('✅ Tablas e índices creados correctamente en Neon.');
+  } else {
+    console.log('✅ El esquema ya existe en Neon.');
+  }
+}
 
 async function main() {
+  await ensureSchema();
+
   console.log('🌱 Iniciando seed de datos de prueba...');
 
   const passwordHash = await bcrypt.hash('taller123', 10);
@@ -85,69 +118,70 @@ async function main() {
     },
   });
 
-  // 3. Escaneo de prueba (Datos reales de la Tacoma)
-  const scanTacoma = await prisma.scan.create({
-    data: {
-      vehicleId: tacoma.id,
-      scannedById: inspector.id,
-      batteryVoltage: 13.3,
-      scannedAt: new Date(),
-      severity: ScanSeverity.HIGH,
-      aiProcessed: true,
-      rawPayload: {
-        vin: '5TFCZ5AN3MX255216',
+  // 3. Escaneo de prueba (Datos reales de la Tacoma) si no existe
+  const existingScans = await prisma.scan.count({ where: { vehicleId: tacoma.id } });
+  if (existingScans === 0) {
+    const scanTacoma = await prisma.scan.create({
+      data: {
+        vehicleId: tacoma.id,
+        scannedById: inspector.id,
         batteryVoltage: 13.3,
-        dtcs: [
-          { code: 'P0300', type: 'PERMANENT', monitorStatus: 'COMPLETED' },
-          { code: 'P0301', type: 'PERMANENT', monitorStatus: 'COMPLETED' },
-          { code: 'P2195', type: 'PENDING', monitorStatus: 'NOT_COMPLETED' },
-        ],
+        scannedAt: new Date(),
+        severity: ScanSeverity.HIGH,
+        aiProcessed: true,
+        rawPayload: {
+          vin: '5TFCZ5AN3MX255216',
+          batteryVoltage: 13.3,
+          dtcs: [
+            { code: 'P0300', type: 'PERMANENT', monitorStatus: 'COMPLETED' },
+            { code: 'P0301', type: 'PERMANENT', monitorStatus: 'COMPLETED' },
+            { code: 'P2195', type: 'PENDING', monitorStatus: 'NOT_COMPLETED' },
+          ],
+        },
+        dtcEntries: {
+          create: [
+            { code: 'P0300', type: DtcType.PERMANENT, monitorStatus: MonitorStatus.COMPLETED },
+            { code: 'P0301', type: DtcType.PERMANENT, monitorStatus: MonitorStatus.COMPLETED },
+            { code: 'P2195', type: DtcType.PENDING, monitorStatus: MonitorStatus.NOT_COMPLETED },
+          ],
+        },
       },
-      dtcEntries: {
-        create: [
-          { code: 'P0300', type: DtcType.PERMANENT, monitorStatus: MonitorStatus.COMPLETED },
-          { code: 'P0301', type: DtcType.PERMANENT, monitorStatus: MonitorStatus.COMPLETED },
-          { code: 'P2195', type: DtcType.PENDING, monitorStatus: MonitorStatus.NOT_COMPLETED },
+    });
+
+    const diagnosisTacoma = await prisma.diagnosis.create({
+      data: {
+        scanId: scanTacoma.id,
+        provider: 'gemini',
+        prompt: 'Analizar DTCs P0300 (PERMANENT), P0301 (PERMANENT), P2195 (PENDING, NOT_COMPLETED) para Toyota Tacoma 2021',
+        response: 'Falla de encendido detectada en cilindro 1 con historial permanente.',
+        summary: 'Fallo de encendido en el cilindro 1 (P0301) acompañado de código de fallo aleatorio (P0300). El código P2195 tiene monitor incompleto tras reinicio reciente.',
+        severity: 'HIGH',
+        recommendations: [
+          'Inspeccionar y reemplazar bujía del cilindro 1 si presenta desgaste',
+          'Verificar bobina de encendido del cilindro 1 intercambiándola con otro cilindro',
+          'Revisar compresión y cableado del inyector del cilindro 1',
         ],
+        tokensUsed: 420,
+        latencyMs: 1450,
       },
-    },
-  });
+    });
 
-  // 4. Diagnóstico IA simulado para la Tacoma
-  const diagnosisTacoma = await prisma.diagnosis.create({
-    data: {
-      scanId: scanTacoma.id,
-      provider: 'gemini',
-      prompt: 'Analizar DTCs P0300 (PERMANENT), P0301 (PERMANENT), P2195 (PENDING, NOT_COMPLETED) para Toyota Tacoma 2021',
-      response: 'Falla de encendido detectada en cilindro 1 con historial permanente.',
-      summary: 'Fallo de encendido en el cilindro 1 (P0301) acompañado de código de fallo aleatorio (P0300). El código P2195 tiene monitor incompleto tras reinicio reciente.',
-      severity: 'HIGH',
-      recommendations: [
-        'Inspeccionar y reemplazar bujía del cilindro 1 si presenta desgaste',
-        'Verificar bobina de encendido del cilindro 1 intercambiándola con otro cilindro',
-        'Revisar compresión y cableado del inyector del cilindro 1',
-      ],
-      tokensUsed: 420,
-      latencyMs: 1450,
-    },
-  });
+    await prisma.workOrder.create({
+      data: {
+        scanId: scanTacoma.id,
+        diagnosisId: diagnosisTacoma.id,
+        vehicleId: tacoma.id,
+        assignedToId: mechanic.id,
+        status: WorkOrderStatus.OPEN,
+        priority: WorkOrderPriority.HIGH,
+        description: 'Revisión urgente de sistema de encendido cilindro 1 (P0300 / P0301)',
+        notes: 'Generada automáticamente tras escaneo OBD-II.',
+        n8nNotified: true,
+      },
+    });
+  }
 
-  // 5. Orden de trabajo generada automáticamente
-  await prisma.workOrder.create({
-    data: {
-      scanId: scanTacoma.id,
-      diagnosisId: diagnosisTacoma.id,
-      vehicleId: tacoma.id,
-      assignedToId: mechanic.id,
-      status: WorkOrderStatus.OPEN,
-      priority: WorkOrderPriority.HIGH,
-      description: 'Revisión urgente de sistema de encendido cilindro 1 (P0300 / P0301)',
-      notes: 'Generada automáticamente tras escaneo OBD-II.',
-      n8nNotified: true,
-    },
-  });
-
-  console.log('✅ Seed completado exitosamente:', {
+  console.log('✅ Seed completado exitosamente en Neon:', {
     users: [admin.email, inspector.email, mechanic.email],
     vehicles: [tacoma.plate, hilux.plate, coaster.plate],
   });
@@ -160,4 +194,5 @@ main()
   })
   .finally(async () => {
     await prisma.$disconnect();
+    await pool.end();
   });
