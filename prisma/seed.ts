@@ -1,11 +1,10 @@
 import 'dotenv/config';
-import * as fs from 'fs';
-import * as path from 'path';
 import { PrismaClient, UserRole, VehicleStatus, DtcType, ScanSeverity, WorkOrderStatus, WorkOrderPriority } from '@prisma/client';
 import { PrismaNeon } from '@prisma/adapter-neon';
 import { Pool, neonConfig } from '@neondatabase/serverless';
 import WebSocket from 'ws';
 import * as bcrypt from 'bcrypt';
+import { applyMigrations } from './apply-migrations';
 
 neonConfig.webSocketConstructor = WebSocket as any;
 
@@ -14,34 +13,9 @@ const pool = new Pool({ connectionString });
 const adapter = new PrismaNeon({ connectionString });
 const prisma = new PrismaClient({ adapter } as any);
 
-async function ensureSchema() {
-  console.log('📦 Verificando esquema en Neon PostgreSQL (vía puerto 443)...');
-  const check = await pool.query(`
-    SELECT EXISTS (
-      SELECT FROM information_schema.tables 
-      WHERE table_schema = 'public' AND table_name = 'users'
-    );
-  `);
-
-  if (!check.rows[0].exists) {
-    console.log('🛠️ Aplicando migración inicial (migration.sql) vía WebSocket 443...');
-    const sqlPath = path.join(__dirname, 'migrations', '20260926000000_init', 'migration.sql');
-    const sql = fs.readFileSync(sqlPath, 'utf8').replace(/^\uFEFF/, '');
-    await pool.query(sql);
-  }
-
-  // Asegurar migración de Fase 2 (readinessStatus global en Scan, eliminar monitorStatus por DTC)
-  await pool.query(`
-    ALTER TABLE "scans" ADD COLUMN IF NOT EXISTS "readinessStatus" JSONB;
-    ALTER TABLE "scans" ADD COLUMN IF NOT EXISTS "notes" TEXT;
-    ALTER TABLE "dtc_entries" DROP COLUMN IF EXISTS "monitorStatus";
-    DROP TYPE IF EXISTS "MonitorStatus";
-  `);
-  console.log('✅ Esquema sincronizado correctamente en Neon.');
-}
 
 async function main() {
-  await ensureSchema();
+  await applyMigrations(pool);
 
   console.log('🌱 Sembrando datos de prueba en Neon...');
 

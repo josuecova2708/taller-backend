@@ -1,4 +1,9 @@
-import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
+import {
+  Injectable,
+  NotFoundException,
+  BadRequestException,
+  UnauthorizedException,
+} from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateScanDto } from './dto/create-scan.dto';
 import { DeterministicFilterService } from './deterministic-filter.service';
@@ -60,7 +65,7 @@ export class ScansService {
     };
   }
 
-  async create(dto: CreateScanDto, userId?: string) {
+  async create(dto: CreateScanDto, userId: string) {
     // 1. Resolver vehículo por vehicleId o por VIN
     let vehicle = null;
     if (dto.vehicleId) {
@@ -79,17 +84,14 @@ export class ScansService {
       );
     }
 
-    // 2. Resolver usuario inspector (si no viene en token durante pruebas, usar el inspector por defecto)
-    let scannedById = userId;
-    if (!scannedById) {
-      const defaultUser = await this.prisma.user.findFirst({
-        orderBy: { createdAt: 'asc' },
-      });
-      if (!defaultUser) {
-        throw new BadRequestException('No existen usuarios registrados para asociar el escaneo.');
-      }
-      scannedById = defaultUser.id;
+    // 2. El escaneo se atribuye al usuario del token. Sin fallback: un escaneo
+    //    sin autor identificado no tiene valor como registro técnico.
+    if (!userId) {
+      throw new UnauthorizedException(
+        'No se pudo identificar al usuario que realiza el escaneo.',
+      );
     }
+    const scannedById = userId;
 
     // 3. Consultar último escaneo del mismo vehículo para detectar recurrencia
     const lastScan = await this.prisma.scan.findFirst({
