@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { DtcType, ScanSeverity, VehicleStatus } from '@prisma/client';
-import { DtcItemDto, ReadinessStatusDto } from './dto/create-scan.dto';
+import { DtcItemDto, ReadinessStatusDto } from '../scans/dto/create-scan.dto';
+import { getDtcDescription as lookupDtcDescription } from './dtc-dictionary';
 
 export interface DeterministicEvaluationResult {
   severity: ScanSeverity;
@@ -16,32 +17,12 @@ export interface DeterministicEvaluationResult {
   }>;
 }
 
-export const STATIC_OBD_DICTIONARY: Record<string, string> = {
-  P0300: 'Fallo de encendido aleatorio o en múltiples cilindros detectado',
-  P0301: 'Fallo de encendido detectado en el cilindro 1',
-  P0302: 'Fallo de encendido detectado en el cilindro 2',
-  P0303: 'Fallo de encendido detectado en el cilindro 3',
-  P0304: 'Fallo de encendido detectado en el cilindro 4',
-  P0171: 'Sistema demasiado pobre (mezcla aire/combustible en Banco 1)',
-  P0172: 'Sistema demasiado rico (mezcla aire/combustible en Banco 1)',
-  P0420: 'Eficiencia del sistema catalizador por debajo del umbral (Banco 1)',
-  P0455: 'Fuga grande detectada en el sistema de control de emisiones evaporativas (EVAP)',
-  P0500: 'Fallo en el sensor de velocidad del vehículo (VSS)',
-  P0562: 'Voltaje del sistema eléctrico bajo',
-  P2195: 'Señal del sensor de oxígeno (A/F) atascada en mezcla pobre (Banco 1 Sensor 1)',
-  P0115: 'Fallo en el circuito de temperatura del refrigerante del motor (ECT)',
-  P0128: 'Temperatura del refrigerante por debajo de la temperatura reguladora del termostato',
-  P0335: 'Fallo en el circuito del sensor de posición del cigüeñal (CKP)',
-};
 
 @Injectable()
 export class DeterministicFilterService {
+  /** Delega en el diccionario puro; se conserva para no romper llamadores. */
   getDtcDescription(code: string): string {
-    const normalized = code.trim().toUpperCase();
-    return (
-      STATIC_OBD_DICTIONARY[normalized] ||
-      'Código de diagnóstico OBD-II registrado en ECU (consultar manual de servicio)'
-    );
+    return lookupDtcDescription(code);
   }
 
   evaluateScan(params: {

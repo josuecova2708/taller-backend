@@ -1,0 +1,90 @@
+{
+  "name": "Taller: resumen diario de la flota",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "30 7 * * 1-6"
+            }
+          ]
+        }
+      },
+      "id": "b2f0c1d2-0001-4a10-9b02-000000000001",
+      "name": "Lunes a sábado, 7:30",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [0, 0]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "https://CAMBIAR-URL-DEL-BACKEND/api/n8n/daily-summary",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {
+          "timeout": 15000
+        }
+      },
+      "id": "b2f0c1d2-0002-4a10-9b02-000000000002",
+      "name": "Pedir resumen al backend",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [260, 0]
+    },
+    {
+      "parameters": {
+        "chatId": "CAMBIAR_POR_EL_CHAT_ID",
+        "text": "={{ $json.mensaje }}",
+        "additionalFields": {
+          "appendAttribution": false
+        }
+      },
+      "id": "b2f0c1d2-0003-4a10-9b02-000000000003",
+      "name": "Enviar por Telegram",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [540, -100]
+    },
+    {
+      "parameters": {
+        "fromEmail": "CAMBIAR_REMITENTE@uagrm.edu.bo",
+        "toEmail": "CAMBIAR_DESTINATARIO@uagrm.edu.bo",
+        "subject": "={{ $json.asunto }}",
+        "emailFormat": "text",
+        "text": "={{ $json.mensaje }}",
+        "options": {
+          "appendAttribution": false
+        }
+      },
+      "id": "b2f0c1d2-0004-4a10-9b02-000000000004",
+      "name": "Enviar por correo",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [540, 100],
+      "disabled": true
+    }
+  ],
+  "connections": {
+    "Lunes a sábado, 7:30": {
+      "main": [[{ "node": "Pedir resumen al backend", "type": "main", "index": 0 }]]
+    },
+    "Pedir resumen al backend": {
+      "main": [
+        [
+          { "node": "Enviar por Telegram", "type": "main", "index": 0 },
+          { "node": "Enviar por correo", "type": "main", "index": 0 }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "America/La_Paz"
+  },
+  "tags": []
+}

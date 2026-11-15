@@ -151,11 +151,29 @@ async function main() {
       response: 'Hipótesis técnica: fallo de encendido activo y recurrente focalizado en cilindro 1.',
       summary: 'Hipótesis técnica: Se detectan códigos confirmados y permanentes de fallo de encendido en cilindro 1 (P0301) y aleatorio (P0300) con monitores completados. Requiere evaluación mecánica antes de autorizar salida a campo.',
       severity: 'HIGH',
-      recommendations: [
-        'Hipótesis 1: Evaluar estado de bujía y bobina de encendido del cilindro 1',
-        'Hipótesis 2: Verificar cableado y pulso del inyector del cilindro 1',
-        'Decisión formal sujeta a validación del responsable técnico de taller',
-      ],
+      // Forma estructurada que produce el esquema de salida del proveedor.
+      // Antes era un arreglo de strings: la pantalla de detalle no mostraba
+      // ni causas ni pasos porque el campo cambió de forma.
+      recommendations: {
+        probableCauses: [
+          {
+            cause: 'Bujía o bobina de encendido del cilindro 1 en mal estado',
+            confidence: 'MEDIA',
+          },
+          {
+            cause: 'Cableado o pulso del inyector del cilindro 1 degradado',
+            confidence: 'BAJA',
+          },
+        ],
+        verificationSteps: [
+          'Inspeccionar visualmente bobina, conector y cableado del cilindro 1',
+          'Intercambiar la bobina del cilindro 1 con otro cilindro y verificar si el fallo se traslada',
+          'Retirar y examinar la bujía del cilindro 1 comparándola con las demás',
+          'Medir la resistencia del inyector del cilindro 1 contra el resto',
+        ],
+        correlations:
+          'P0300 y P0301 comparten probablemente la misma causa raíz: el fallo aleatorio y el específico del cilindro 1 apuntan al mismo sistema.',
+      },
       tokensUsed: 410,
       latencyMs: 1320,
     },

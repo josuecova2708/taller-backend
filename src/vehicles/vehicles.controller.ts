@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Patch, Delete, Body, Param } from '@nestjs/common';
+import { Controller, Get, Post, Patch, Delete, Body, Param, Query } from '@nestjs/common';
 import { VehiclesService } from './vehicles.service';
 import { CreateVehicleDto } from './dto/create-vehicle.dto';
 import { UpdateVehicleDto } from './dto/update-vehicle.dto';
@@ -11,8 +11,8 @@ export class VehiclesController {
 
   @RequirePermission(Permission.VEHICLE_READ)
   @Get()
-  findAll() {
-    return this.vehiclesService.findAll();
+  findAll(@Query('includeInactive') includeInactive?: string) {
+    return this.vehiclesService.findAll(includeInactive === 'true');
   }
 
   @RequirePermission(Permission.VEHICLE_READ)
@@ -45,6 +45,13 @@ export class VehiclesController {
     return this.vehiclesService.update(id, dto);
   }
 
+  @RequirePermission(Permission.VEHICLE_WRITE)
+  @Patch(':id/reactivate')
+  reactivate(@Param('id') id: string) {
+    return this.vehiclesService.reactivate(id);
+  }
+
+  /** Baja lógica: el vehículo deja la flota activa pero conserva su historial. */
   @RequirePermission(Permission.VEHICLE_WRITE)
   @Delete(':id')
   remove(@Param('id') id: string) {

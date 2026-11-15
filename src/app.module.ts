@@ -9,6 +9,7 @@ import { DiagnosisModule } from './diagnosis/diagnosis.module';
 import { WorkOrdersModule } from './work-orders/work-orders.module';
 import { AiModule } from './ai/ai.module';
 import { N8nModule } from './n8n/n8n.module';
+import { PushModule } from './push/push.module';
 import { JwtAuthGuard } from './auth/guards/jwt-auth.guard';
 import { PermissionsGuard } from './auth/guards/permissions.guard';
 import { validateEnv } from './config/env.validation';
@@ -24,6 +25,7 @@ import { validateEnv } from './config/env.validation';
     WorkOrdersModule,
     AiModule,
     N8nModule,
+    PushModule,
   ],
   providers: [
     // Orden significativo: primero se autentica, después se autoriza.

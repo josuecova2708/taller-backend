@@ -41,3 +41,8 @@ lerna-debug.log*
 .env.test.local
 .env.production.local
 .env.local
+
+# Clave de la cuenta de servicio de Firebase (push)
+*firebase-adminsdk*.json
+firebase-service-account*.json
+/secrets

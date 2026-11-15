@@ -13,7 +13,7 @@ services:
     restart: unless-stopped
 
   n8n:
-    image: docker.n8n.io/n8nio/n8n:latest
+    image: docker.n8n.io/n8nio/n8n:1.80.0
     container_name: taller-n8n
     environment:
       - N8N_BASIC_AUTH_ACTIVE=true

@@ -18,10 +18,11 @@
 | **Frontend**          | Next.js                                            | **16.x**                         | App Router, React Server Components, Tailwind CSS v4                       |
 | **Móvil**             | Flutter                                            | **3.35.3**                       | Pinned con **FVM**. **Solo Android** (API 21–35)                           |
 | **BT Classic**        | flutter_bluetooth_serial_plus                      | **^0.5.6**                       | Fork mantenido, Android 12–15 compatible                                   |
-| **Automatización**    | n8n                                                | **2.40.x**                       | Self-hosted via **Docker**                                                 |
-| **IA interpretativa** | Claude API vía SDK oficial `@anthropic-ai/sdk`     | `AI_MODEL=claude-opus-5`         | Modelo configurable por `.env`. Respuesta tipada vía structured outputs     |
+| **Automatización**    | n8n                                                | **1.80.0**                       | Self-hosted via **Docker**; la única versión que funcionó en el otro proyecto. En producción se reusa el n8n de `habitat-rg` (Azure) |
+| **IA interpretativa** | Claude API vía SDK oficial `@anthropic-ai/sdk`     | `AI_MODEL=claude-sonnet-5`       | Modelo configurable por `.env`. Respuesta tipada vía structured outputs     |
 | **IA secundaria**     | Ollama (modelo local)                              | local                            | Demo de extensibilidad, no dependencia                                     |
 | **Contenedores**      | Docker + Docker Compose                            | latest                           | Para n8n en desarrollo. BD en Neon                                         |
+| **Despliegue**        | Azure Container Apps (Canada Central)              | —                                | Imágenes públicas en Docker Hub (`Dockerfile` en backend y frontend); BD en Neon (rama `prod`). Ver `docs/cap7/08-despliegue-azure.md` |
 
 > [!WARNING]
 > **iOS no está soportado.** Los adaptadores ELM327 genéricos usan Bluetooth Classic (SPP), que Apple restringe a dispositivos certificados MFi. Este proyecto es exclusivamente Android.
@@ -29,7 +30,9 @@
 > [!NOTE]
 > **Modelo de IA**: Se utiliza **Claude API (Anthropic)** como proveedor principal (`AI_PROVIDER=claude`), manteniendo el identificador del modelo (`AI_MODEL`) configurable en `.env` sin hardcodearlo.
 >
-> El modelo por defecto es **`claude-opus-5`** (la familia Claude 5 es la vigente; `claude-sonnet-5` es la alternativa más económica si el consumo de API resulta un problema). Se descartó el identificador `claude-sonnet-4-20250514` que figuraba en versiones previas de este plan: corresponde a un modelo de mayo 2025.
+> El modelo por defecto es **`claude-sonnet-5`** con `AI_EFFORT=low`. Se descartó `claude-opus-5` tras medirlo: la tarea está acotada (el filtro determinístico ya clasificó la severidad, la semántica OBD vive en el prompt del sistema y el esquema impone la forma de la salida), así que no se justifica su costo. Medición real sobre el mismo escaneo: Opus 5 a effort medium costó $0,030 y tardó 14 s; Sonnet 5 a effort low costó $0,024 y tardó 8,6 s, con calidad equivalente. También se descartó el identificador `claude-sonnet-4-20250514` de versiones previas de este plan: corresponde a un modelo de mayo 2025.
+>
+> `claude-haiku-4-5` queda disponible como opción de último recurso (~$0,012 por hipótesis), pero **rechaza el parámetro `effort`**; el código lo detecta y lo omite para que cambiar `AI_MODEL` no rompa nada.
 >
 > La integración usa el **SDK oficial `@anthropic-ai/sdk`**, no llamadas REST manuales, y obtiene la respuesta ya validada contra un esquema mediante **structured outputs** (`output_config.format`). Esto elimina la tarea de "parsear la respuesta de la IA a mano", que era una fuente previsible de errores.
 
@@ -82,14 +85,16 @@ En `.gitignore`: `.fvm/flutter_sdk`, `.fvm/cache`
 ## Modelo de Autorización
 
 > [!IMPORTANT]
-> Los roles definitivos dependen de una **entrevista pendiente con la institución** sobre cómo gestionan hoy el mantenimiento de su flota. Por eso el diseño no apuesta a acertar los nombres: apuesta a que cambiarlos sea barato.
+> **No hubo validación institucional.** Se envió carta formal y se intentó contacto telefónico con la unidad responsable de la flota; no hubo respuesta. Por eso los roles **no modelan el organigrama de una institución concreta**: son un diseño de propósito general basado en **separación de deberes**, el principio estándar de control interno.
+>
+> Esto es una decisión de diseño explícita, no una limitación encubierta. El sistema queda adaptable: la correspondencia entre roles y atribuciones vive en una sola matriz, de modo que cualquier institución puede ajustarla a su estructura sin modificar código ni migrar la base.
 
 ### Dos decisiones que absorben el cambio
 
 1. **Los guards no preguntan por el rol, preguntan por el permiso.** Los controladores declaran `@RequirePermission('order:close')`, nunca `@Roles('ADMIN')`. La correspondencia rol → permisos vive en una única matriz (`src/auth/permissions.ts`). Reasignar atribuciones tras la entrevista es editar una celda, no recorrer controladores.
 2. **El nombre visible está separado del valor del enum.** `UserRole` es el identificador técnico estable; `ROLE_LABELS` contiene la etiqueta que ve el usuario. Si la institución llama "Encargado de Movilidades" a quien realiza los escaneos, se cambia un string y **no hay migración de base de datos**.
 
-### Roles provisionales y matriz de permisos
+### Roles y matriz de permisos
 
 | Permiso                | ADMIN | MECHANIC | INSPECTOR |
 | ---------------------- | :---: | :------: | :-------: |
@@ -112,7 +117,9 @@ En `.gitignore`: `.fvm/flutter_sdk`, `.fvm/cache`
 
 ### Ampliación prevista: SUPERVISOR
 
-Si la entrevista confirma que el encargado de flota es una persona distinta del administrador del sistema, se agrega `SUPERVISOR` al enum y una fila a la matriz con `order:close` + `vehicle:authorize`. **Ningún controlador cambia.** Es una migración aditiva (`ALTER TYPE ... ADD VALUE`), sin transformación de datos existentes.
+Si una institución separa al encargado de flota del administrador del sistema, se agrega `SUPERVISOR` al enum y una fila a la matriz con `order:close` + `vehicle:authorize`. **Ningún controlador cambia.** Es una migración aditiva (`ALTER TYPE ... ADD VALUE`), sin transformación de datos existentes.
+
+Esta extensibilidad es precisamente lo que se demuestra en defensa: ante la pregunta "¿y si en mi institución los roles son otros?", la respuesta es una celda de una matriz, no una refactorización.
 
 ### Cadena de autenticación
 
@@ -150,14 +157,22 @@ Taller_sw/
 │   │   │   └── guards/          # JwtAuthGuard + PermissionsGuard (globales)
 │   │   ├── config/
 │   │   │   └── env.validation.ts # Falla el arranque si falta/es débil JWT_SECRET
+│   │   ├── obd/                 # Dominio OBD-II, sin acoplar a casos de uso
+│   │   │   ├── dtc-dictionary.ts        # Diccionario estático de códigos
+│   │   │   ├── deterministic-filter.service.ts
+│   │   │   └── vehicle-status.service.ts # Recálculo al cerrar una orden
 │   │   ├── vehicles/            # CRUD vehículos
 │   │   ├── scans/               # Recepción, filtro determinístico y persistencia de escaneos
 │   │   ├── diagnosis/           # Motor de diagnóstico (filtro + IA)
 │   │   ├── work-orders/         # Órdenes de trabajo
-│   │   ├── ai/                  # Provider interface + implementaciones
+│   │   ├── ai/                  # Interface de proveedor + implementaciones
 │   │   │   ├── ai.interface.ts
-│   │   │   ├── claude.provider.ts
-│   │   │   └── ollama.provider.ts
+│   │   │   ├── diagnosis.schema.ts      # Esquema Zod de salida estructurada
+│   │   │   ├── diagnosis.prompt.ts      # Prompt del sistema + constructor
+│   │   │   └── providers/
+│   │   │       ├── claude.provider.ts
+│   │   │       ├── mock.provider.ts     # Sin API ni costo, para desarrollo
+│   │   │       └── ollama.provider.ts   # pendiente
 │   │   ├── n8n/                 # Webhooks para n8n
 │   │   └── prisma/              # PrismaService con adapter Neon (WS/443)
 │   ├── prisma/
@@ -236,6 +251,7 @@ Las migraciones viven en `prisma/migrations/` y las aplica `applyMigrations()` (
 | `20260926000000_init`                   | Esquema inicial (escrito a mano, de ahí el drift que corrigió la tercera) |
 | `20260927000000_scan_readiness_global`  | `readinessStatus` global en `scans`; elimina `dtc_entries.monitorStatus` y el enum `MonitorStatus` |
 | `20260928000000_fix_cascade_deletes`    | Alinea 5 FK con `onDelete: Cascade` del schema                            |
+| `20261016000000_scan_protocol`          | Columna `scans.protocol` (JSONB): protocolo OBD-II detectado con `ATDPN`  |
 
 ---
 
@@ -479,34 +495,49 @@ sequenceDiagram
 
 ---
 
-### Fase 3 — Motor de Diagnóstico IA + Monitor en Vivo (Semanas 6-8) ⏳ PENDIENTE
+### Fase 3 — Motor de Diagnóstico IA + Monitor en Vivo (Semanas 6-8) 🔄 EN CURSO
 
 **Objetivo:** Los escaneos con códigos relevantes generan hipótesis técnicas en lenguaje natural con Claude API. El monitor en vivo muestra PIDs en tiempo real.
 
 | Tarea                                                                                                                                                 | Proyecto | Estado |
 | ----------------------------------------------------------------------------------------------------------------------------------------------------- | -------- | ------ |
-| Interface `AiProvider` (método `diagnose()` con input/output tipado)                                                                                  | Backend  | ⏳     |
-| Corregir `ai.interface.ts`: `DiagnosisInput` aún arrastra `monitorStatus` per-DTC (ver nota del modelo de datos)                                       | Backend  | ⏳     |
-| Implementación `ClaudeProvider` con SDK `@anthropic-ai/sdk`, modelo configurable vía `AI_MODEL`                                                        | Backend  | ⏳     |
-| Prompt engineering: estructura con DTCs + readiness + contexto vehículo + historial                                                                   | Backend  | ⏳     |
-| **Prompt presenta resultados como hipótesis técnica**, no diagnóstico confirmado                                                                      | Backend  | ⏳     |
-| Respuesta tipada con **structured outputs** (`output_config.format`) → objeto `Diagnosis`, sin parser manual                                            | Backend  | ⏳     |
-| Manejo de fallos de la IA: timeout, error de API y cuota. El escaneo debe persistir aunque la IA falle                                                  | Backend  | ⏳     |
+| Interface `AiProvider` (método `diagnose()` con input/output tipado)                                                                                  | Backend  | ✅     |
+| Corregir `ai.interface.ts`: `DiagnosisInput` aún arrastra `monitorStatus` per-DTC (ver nota del modelo de datos)                                       | Backend  | ✅     |
+| Implementación `ClaudeProvider` con SDK `@anthropic-ai/sdk`, modelo configurable vía `AI_MODEL`                                                        | Backend  | ✅     |
+| Prompt engineering: estructura con DTCs + readiness + contexto vehículo + historial                                                                   | Backend  | ✅     |
+| **Prompt presenta resultados como hipótesis técnica**, no diagnóstico confirmado                                                                      | Backend  | ✅     |
+| Respuesta tipada con **structured outputs** (`output_config.format`) → objeto `Diagnosis`, sin parser manual                                            | Backend  | ✅     |
+| Manejo de fallos de la IA: timeout, error de API y cuota. El escaneo debe persistir aunque la IA falle                                                  | Backend  | ✅     |
 | Diccionario estático de DTCs comunes (capa determinística pre-IA)                                                                                     | Backend  | ✅ (adelantado en Fase 2) |
-| Generación automática de `WorkOrder` cuando el filtro determina que requiere evaluación                                                               | Backend  | ⏳     |
-| **Decidir deduplicación de órdenes**: `WorkOrder.scanId` es único, así que escaneos semanales del mismo fallo sin reparar generarían una orden nueva cada vez | Backend  | ⏳     |
-| Endpoints de ciclo de vida de la orden: cambio de estado (`order:update_status`) y cierre (`order:close`)                                              | Backend  | ⏳     |
-| Endpoints: `GET /scans/:id/diagnosis`, `GET /work-orders`                                                                                             | Backend  | ⏳     |
+| Generación automática de `WorkOrder` cuando el filtro determina que requiere evaluación                                                               | Backend  | ✅     |
+| **Deduplicación de órdenes**: si el vehículo ya tiene una orden OPEN/IN_PROGRESS, el escaneo no crea otra; sube la prioridad y registra la recurrencia | Backend  | ✅     |
+| Endpoints de ciclo de vida de la orden: `PATCH /:id/status` (avance), `POST /:id/close` (cierre), `PATCH /:id/assign` | Backend  | ✅     |
+| Recálculo del estado del vehículo al cerrar la última orden abierta (`VehicleStatusService`) | Backend  | ✅     |
+| Endpoints: `GET /scans/:id/diagnosis`, `POST /scans/:id/diagnosis` (reintento), `GET /scans/pending-diagnosis`, `GET /work-orders` | Backend  | ✅     |
 | Implementación `OllamaProvider` (misma interface, modelo local)                                                                                       | Backend  | ⏳     |
 | **Monitor en Vivo**: pantalla Flutter que lee PIDs en loop (RPM, temp, velocidad, acelerador, voltaje) y muestra gauges/gráficos actualizados ~2-3 Hz | Mobile   | ⏳     |
 | Respuestas del simulador para PIDs de monitor en vivo                                                                                                 | Mobile   | ✅ (adelantado en Fase 2) |
+
+> [!IMPORTANT]
+> **La hipótesis se genera de forma asíncrona.** `POST /scans` responde en ~2 s con el dictamen determinístico y la orden ya creada; la llamada al proveedor corre en segundo plano y tarda ~9 s. El diagrama de secuencia de este documento muestra el flujo sincrónico: en la implementación el `201` llega antes de que exista la hipótesis, y el campo `Scan.aiProcessed` marca si ya se generó.
+>
+> Motivo: el inspector está en el taller con el teléfono en la mano. Nueve segundos de espera, sobre datos móviles y con riesgo de timeout, no se justifican cuando el dictamen determinístico ya está disponible de inmediato.
+>
+> **La orden de evaluación se crea ANTES de llamar a la IA**, con el dictamen determinístico como justificación. Si el proveedor falla, si se agota el crédito o si el proceso se reinicia, la orden sigue siendo válida y el escaneo queda con `aiProcessed = false`, recuperable con `POST /scans/:id/diagnosis` sin tener que volver a escanear el vehículo. El sistema sigue siendo útil sin IA.
+>
+> **Ventana de recurrencia: los últimos 3 escaneos.** Comparar solo contra el anterior no detectaba fallas intermitentes que aparecen, desaparecen y vuelven, y además marcaba como "recurrencia histórica" dos escaneos hechos el mismo día.
+>
+> **Cerrar la orden es lo que libera al vehículo, y tiene su propio permiso.** El avance de la orden (`PATCH /:id/status`) y su cierre (`POST /:id/close`) son endpoints distintos a propósito: el mecánico tiene `order:update_status` pero no `order:close`. La separación vive en la superficie de la API, no en una validación interna, de modo que el permiso que falta se ve en un 403 y no en un error de dominio. El cierre exige una justificación escrita (`resolution`), que queda en el historial de notas.
+>
+> Al cerrarse la **última** orden abierta, el estado del vehículo se recalcula re-ejecutando el filtro determinístico sobre el escaneo más reciente (`VehicleStatusService`). Sin este paso, la regla "el estado no baja con órdenes abiertas" habría dejado a todo vehículo reparado en 🔴 de forma permanente. Nótese que un vehículo cuyo último escaneo fue crítico **permanece crítico aunque se cierre la orden**: la reparación quedó registrada, pero hace falta un escaneo posterior que la confirme. Eso es la disciplina que persigue un sistema preventivo, no un efecto secundario.
+
 
 > [!NOTE]
 > **Monitor en Vivo ≠ Telemetría Cloud.** Es lectura local en la pantalla del celular mientras está conectado al vehículo vía BT. Los datos NO se transmiten por MQTT ni se almacenan en streaming. Opcionalmente se puede guardar un snapshot al finalizar la sesión.
 
 ---
 
-### Fase 4 — Dashboard Web Completo + Reportes PDF (Semanas 9-11) ⏳ PENDIENTE
+### Fase 4 — Dashboard Web Completo + Reportes PDF (Semanas 9-11) 🔄 EN CURSO
 
 **Objetivo:** El dashboard muestra el estado de la flota, diagnósticos, órdenes de trabajo y permite exportar reportes PDF.
 
@@ -514,9 +545,9 @@ sequenceDiagram
 | ---------------------------------------------------------------------------------------- | -------- | ------ |
 | Dashboard principal: cards por vehículo con indicador 🟢🟡🔴                             | Frontend | ✅ (base conectada en Fase 2) |
 | Vista de vehículo: datos + historial de escaneos (tabla paginada)                        | Frontend | ⏳     |
-| Vista de escaneo: códigos DTC + readiness + diagnóstico IA + severidad                   | Frontend | ✅ (base conectada en Fase 2) |
-| Lista de órdenes de trabajo con filtros (estado, prioridad)                              | Frontend | ⏳     |
-| Detalle de orden: diagnóstico asociado, cambio de estado, notas del mecánico             | Frontend | ⏳     |
+| Vista de escaneo: DTC + readiness + protocolo + tipo de motor + dictamen + hipótesis estructurada, con sondeo del estado "generando" y reintento manual | Frontend | ✅     |
+| Lista de órdenes de trabajo con filtros (estado, prioridad)                              | Frontend | ✅     |
+| Detalle de orden: hipótesis asociada, avance, cierre con justificación, asignación y notas, todo condicionado por permiso | Frontend | ✅     |
 | **Exportar a PDF**: reporte de escaneo individual, reporte de vehículo, reporte de orden | Frontend | ⏳     |
 | Refinamiento de UI móvil: resultado del escaneo, feedback visual                         | Mobile   | ⏳     |
 | Vistas y acciones condicionadas por permiso (reutiliza `can()` de la Fase 2.5)            | Frontend | ⏳     |
@@ -524,6 +555,15 @@ sequenceDiagram
 
 > [!NOTE]
 > **Decisión de librería PDF**: `@react-pdf/renderer`. Se descarta `jsPDF` + `html2canvas` porque rasteriza la página (texto no seleccionable, archivos grandes, fuentes borrosas al imprimir) y se descarta la generación server-side con Puppeteer por el peso que agrega al backend. `@react-pdf/renderer` compone el reporte de forma declarativa y produce texto real, que es lo que se necesita para un anexo imprimible del informe de grado.
+
+---
+
+> [!NOTE]
+> **Verificación de contrato entre backend y UI** (`npm run ui:contract` en el backend).
+>
+> Al conectar las pantallas apareció un desajuste que ni el build ni los tests detectaban: la lista de escaneos tipeaba `diagnosis.recommendations` como `string[]` y lo renderizaba con `.map()`. Al pasar a salida estructurada ese campo es un objeto, así que `Array.isArray()` daba `false` y **la hipótesis desaparecía de la pantalla sin ningún error visible**.
+>
+> Un desajuste de forma no rompe la compilación ni los tests unitarios: solo se ve corriendo el servidor. Por eso existe el script, que comprueba 33 propiedades de las respuestas que consumen las páginas, incluidas las cuatro acciones que disparan los botones del ciclo de vida de la orden.
 
 ---
 
@@ -580,7 +620,7 @@ flowchart LR
     style F1 fill:#c8e6c9,stroke:#2e7d32
     style F2 fill:#c8e6c9,stroke:#2e7d32
     style F25 fill:#c8e6c9,stroke:#2e7d32
-    style F3 fill:#fff3e0,stroke:#e65100
+    style F3 fill:#fff9c4,stroke:#f57f17
     style F4 fill:#f3e5f5,stroke:#6a1b9a
     style F5 fill:#fce4ec,stroke:#c62828
     style F6 fill:#e0f2f1,stroke:#00695c
@@ -595,7 +635,7 @@ flowchart LR
 | 1 ✅ | `nest build` compila. `next build` compila. `flutter analyze` sin errores. Login funciona. Neon con tablas y seed                                                  |
 | 2 ✅ | Escaneo simulado desde Flutter llega al backend y se persiste con readiness global. `GET /vehicles/:id/scans` devuelve historial. Tests Jest y Flutter pasando     |
 | 2.5 ✅ | `curl` sin token a `/api/vehicles`, `/api/scans` y `/api/work-orders` devuelve 401. `/dashboard` sin cookie redirige a login. La app móvil no permite escanear sin sesión y el escaneo queda firmado por el autor real. Login como `mecanico@` no muestra acciones de cierre de orden. El backend no arranca con `JWT_SECRET` vacío o de ejemplo. `DELETE /vehicles/:id` devuelve 200 y borra en cascada sus escaneos y DTCs (drift de FK: 0 de 8). `nest build` ✅ · Jest 11/11 ✅ · `next build` ✅ · `flutter analyze` sin issues ✅ · `flutter test` 4/4 ✅ |
-| 3    | `POST /scans` con DTCs relevantes genera hypothesis + work order con Claude API. Monitor en Vivo muestra RPM y temp en tiempo real (simulador y hardware)          |
+| 3 🔄 | **Backend verificado en vivo**: `POST /scans` con P0300 responde en 2,3 s con orden creada y `aiProcessed=false`; a los ~9 s `GET /scans/:id/diagnosis` devuelve la hipótesis validada contra esquema (3.400 tokens, $0,024). Un segundo escaneo del mismo código NO duplica la orden: sube la prioridad a CRITICAL y anota la recurrencia. Un escaneo limpio con orden abierta NO devuelve el vehículo a OK. Ciclo de la orden verificado por rol: el MECHANIC avanza (200) pero no cierra ni asigna (403); el ADMIN cierra (201) y el estado se recalcula; un escaneo limpio posterior sí libera el vehículo a OK. Jest 40/40 ✅. **Pendiente**: Monitor en Vivo y OllamaProvider |
 | 4    | Dashboard completo navegable. Datos reales visibles. Exportar PDF funciona. Responsive en desktop                                                                  |
 | 5    | Flujo completo: scan → hypothesis → work order → email + Telegram + push notification. Log de n8n muestra ejecución exitosa                                        |
 | 6    | Login con diferentes roles muestra vistas distintas. Demo completa con vehículo real sin fallos. Reportes PDF generados                                            |
@@ -610,14 +650,15 @@ flowchart LR
 | # | Hallazgo | Dónde | Impacto | Se corrige en |
 | - | -------- | ----- | ------- | ------------- |
 | 1 | ~~La migración aplicada no coincide con el schema: 5 FK creadas con `ON DELETE RESTRICT` donde `schema.prisma` declara `onDelete: Cascade`~~ | `migration.sql` escrito a mano | `DELETE /vehicles/:id` devolvía **500** (`P2003`) para cualquier vehículo con escaneos | ✅ **RESUELTO** — migración `20260928000000_fix_cascade_deletes`, drift verificado en 0/8 FK |
-| 2 | El parser de DTCs asume el byte de conteo de **ISO 15765-4 (CAN)**. En ISO 9141-2 / KWP2000 ese byte no existe, así que se pierde el primer código y se desalinea el resto | `elm327_service.dart` → `parseDtcs()` | Vehículos anteriores a ~2008 devuelven códigos incorrectos. Como se usa `ATSP0` (autodetección), ambos protocolos aparecerán en una flota real | Fase 6 |
-| 3 | El readiness mapea el byte D como si el motor fuera siempre de **encendido por chispa**. No se lee el bit de encendido por compresión del byte B | `elm327_service.dart` → `parseReadiness()` | En un bus **diésel** se reportaría "Sistema EVAP incompleto" en un vehículo que no tiene sistema EVAP. El caso de uso central del proyecto es justamente un bus | Fase 6 |
-| 4 | `vehicle.status` se sobrescribe con el resultado del último escaneo, sin considerar órdenes abiertas | `scans.service.ts` → `create()` | Un escaneo limpio devuelve a 🟢 OK un vehículo con una orden crítica sin reparar (p. ej. tras borrar códigos o desconectar la batería) | Fase 3 |
-| 5 | La recurrencia se calcula contra **un solo** escaneo previo (`findFirst`) | `scans.service.ts` → `create()` | Un patrón intermitente que aparece en los escaneos 1 y 3 no se detecta; y dos escaneos seguidos el mismo día se marcan como "recurrencia histórica" y escalan a CRÍTICO | Fase 3 |
+| 2 | ~~El parser de DTCs asume el byte de conteo de ISO 15765-4 (CAN)~~ | `elm327_service.dart` | En ISO 9141-2 / KWP2000 no solo se perdía el primer código: se inventaban códigos inexistentes (`43 03 00 03 01` se leía como P0003 y P0100 en lugar de P0300 y P0301) | ✅ **RESUELTO**: se consulta `ATDPN` al adaptador y `parseDtcs` recibe `hasCountByte`. **No verificable con el hardware disponible** (solo hay vehículos CAN); cubierto por el escenario `legacy_iso9141` del simulador |
+| 3 | ~~El readiness mapea el byte D como si el motor fuera siempre de encendido por chispa~~ | `elm327_service.dart` | En un bus diésel se reportaba "Sistema EVAP incompleto" en un vehículo sin sistema EVAP | ✅ **RESUELTO**: se lee el bit 3 del byte B (encendido por compresión) y se usan los monitores diésel. Además se enmascara con el byte C para no reportar monitores no soportados. **No verificable con el hardware disponible** (solo vehículos a gasolina); cubierto por el escenario `bus_diesel` |
+| 4 | ~~`vehicle.status` se sobrescribe con el resultado del último escaneo, sin mirar órdenes abiertas~~ | `scans.service.ts` | Un escaneo limpio devolvía a OK un vehículo con orden crítica abierta | ✅ **RESUELTO** en Fase 3: `resolverEstadoVehiculo()` conserva el estado más grave mientras haya una orden abierta. Verificado en vivo |
+| 5 | ~~La recurrencia se calcula contra un solo escaneo previo (`findFirst`)~~ | `scans.service.ts` | No detectaba fallas intermitentes; dos escaneos el mismo día escalaban a CRÍTICO | ✅ **RESUELTO** en Fase 3: ventana de los últimos 3 escaneos (`VENTANA_HISTORIAL`) |
 | 6 | `docker-compose.yml` levanta Postgres con la base `taller_obd`, pero n8n apunta a una base `n8n` que nadie crea | `docker-compose.yml` | n8n no arranca con persistencia Postgres. Además contradice "la BD está en Neon" | Fase 5 |
-| 7 | `taller-mobile` no tiene `.gitignore` | repo móvil | Hoy el repo está limpio, pero el primer `flutter build apk` empieza a versionar artefactos | Cuando sea |
+| 7 | ~~`taller-mobile` no tiene `.gitignore`~~ | repo móvil | Artefactos de `flutter build` se habrían versionado | ✅ **RESUELTO**: el repo ya tiene el `.gitignore` estándar de Flutter |
 | 8 | `PrismaService` detecta Neon con `connectionString.includes('neon.tech')` | `prisma.service.ts` | Frágil ante cambios de host; conviene una variable de entorno explícita | Cuando sea |
-| 9 | `ReadinessStatusDto` marca campos con `@IsOptional()` sin validador de tipo | `create-scan.dto.ts` | `milOn: "banana"` pasa la validación y se persiste | Fase 3 |
+| 9 | ~~`ReadinessStatusDto` marca campos con `@IsOptional()` sin validador de tipo~~ | `create-scan.dto.ts` | `milOn: "banana"` pasaba la validación y se persistía | ✅ **RESUELTO**: validadores de tipo en todos los campos, verificado con un payload inválido |
+| 10 | **NestJS 12 es ESM-first (`"type": "module"`) pero `ts-jest` corre en CommonJS.** Todo spec cuyo grafo de imports toque `@nestjs/common` falla con `Cannot use import statement outside a module` | configuración de Jest | Cada spec de servicio necesita un `jest.mock('@nestjs/common', ...)` manual al inicio, que además hay que ampliar con cada decorador o clase nueva que se use. Es friccion permanente y hace frágiles los tests | Cuando moleste: configurar Jest para ESM, o `transformIgnorePatterns` |
 
 ---
 

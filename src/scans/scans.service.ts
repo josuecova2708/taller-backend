@@ -2,17 +2,29 @@ import {
   Injectable,
   NotFoundException,
   BadRequestException,
+  ConflictException,
   UnauthorizedException,
 } from '@nestjs/common';
+import { normalizarVin, vinEnConflicto } from './vin-check';
+import { VehicleStatus } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateScanDto } from './dto/create-scan.dto';
-import { DeterministicFilterService } from './deterministic-filter.service';
+import { DeterministicFilterService } from '../obd/deterministic-filter.service';
+import { DiagnosisService, VENTANA_HISTORIAL } from '../diagnosis/diagnosis.service';
+import { WorkOrdersService } from '../work-orders/work-orders.service';
+import { resolverEstadoVehiculo } from './vehicle-status';
+import { N8nService } from '../n8n/n8n.service';
+import { PushService } from '../push/push.service';
 
 @Injectable()
 export class ScansService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly filterService: DeterministicFilterService,
+    private readonly diagnosisService: DiagnosisService,
+    private readonly workOrdersService: WorkOrdersService,
+    private readonly n8nService: N8nService,
+    private readonly pushService: PushService,
   ) {}
 
   async findAll() {
@@ -66,6 +78,14 @@ export class ScansService {
   }
 
   async create(dto: CreateScanDto, userId: string) {
+    // 0. Una lectura incompleta no es un escaneo: registrarla dejaría como
+    //    operativo un vehículo que en realidad no se pudo leer.
+    if (dto.complete === false) {
+      throw new BadRequestException(
+        'El escaneo está incompleto: no se pudieron leer los monitores o los códigos de falla. Vuelva a escanear el vehículo.',
+      );
+    }
+
     // 1. Resolver vehículo por vehicleId o por VIN
     let vehicle = null;
     if (dto.vehicleId) {
@@ -84,6 +104,20 @@ export class ScansService {
       );
     }
 
+    if (!vehicle.active) {
+      throw new BadRequestException(
+        `El vehículo ${vehicle.plate} está dado de baja y no admite nuevos escaneos.`,
+      );
+    }
+
+    // 1.1 El vehículo elegido a mano debe ser el mismo que reporta la ECU.
+    if (dto.vehicleId && vinEnConflicto(vehicle.vin, dto.vin)) {
+      throw new ConflictException(
+        `El VIN leído (${normalizarVin(dto.vin)}) no corresponde al vehículo seleccionado ` +
+          `(${vehicle.plate}, VIN ${vehicle.vin}). Verifique el vehículo antes de registrar el escaneo.`,
+      );
+    }
+
     // 2. El escaneo se atribuye al usuario del token. Sin fallback: un escaneo
     //    sin autor identificado no tiene valor como registro técnico.
     if (!userId) {
@@ -93,16 +127,26 @@ export class ScansService {
     }
     const scannedById = userId;
 
-    // 3. Consultar último escaneo del mismo vehículo para detectar recurrencia
-    const lastScan = await this.prisma.scan.findFirst({
+    // 3. Historial para detectar recurrencia.
+    //    Se miran los últimos VENTANA_HISTORIAL escaneos y no solo el anterior:
+    //    comparar contra uno solo no detecta fallas intermitentes que aparecen,
+    //    desaparecen y vuelven, que es el patrón que interesa a un sistema
+    //    preventivo. Antes, además, dos escaneos seguidos el mismo día se
+    //    marcaban como "recurrencia histórica" y escalaban a CRÍTICO.
+    const previousScans = await this.prisma.scan.findMany({
       where: { vehicleId: vehicle.id },
       orderBy: { scannedAt: 'desc' },
-      include: { dtcEntries: true },
+      take: VENTANA_HISTORIAL,
+      include: { dtcEntries: { select: { code: true } } },
     });
 
-    const previousDtcCodes = lastScan
-      ? lastScan.dtcEntries.map((e) => e.code)
-      : [];
+    const previousDtcCodes = Array.from(
+      new Set(
+        previousScans.flatMap((s) =>
+          s.dtcEntries.map((e) => e.code.trim().toUpperCase()),
+        ),
+      ),
+    );
 
     // 4. Ejecutar Filtro Determinístico (Capa 1)
     const evaluation = this.filterService.evaluateScan({
@@ -120,8 +164,12 @@ export class ScansService {
         batteryVoltage: dto.batteryVoltage ?? null,
         scannedAt: dto.scannedAt ? new Date(dto.scannedAt) : new Date(),
         readinessStatus: dto.readinessStatus ? (dto.readinessStatus as any) : null,
+        protocol: dto.protocol ? (dto.protocol as any) : null,
         rawPayload: dto.rawPayload ? (dto.rawPayload as any) : (dto as any),
-        notes: dto.notes || evaluation.rationale,
+        // Dos campos distintos: antes la observación del inspector
+        // reemplazaba al dictamen, y la IA la recibía como si fuera el dictamen.
+        notes: dto.notes?.trim() || null,
+        rationale: evaluation.rationale,
         severity: evaluation.severity,
         aiProcessed: false,
         dtcEntries: {
@@ -140,20 +188,74 @@ export class ScansService {
       },
     });
 
+    // 6. Crear o actualizar la orden de evaluación ANTES de llamar a la IA.
+    //    Así la orden existe aunque el proveedor falle o no haya crédito: su
+    //    justificación es el dictamen determinístico, y la hipótesis solo la
+    //    enriquece después.
+    let workOrderId: string | null = null;
+    if (evaluation.requiresAiEvaluation) {
+      const { orden, creada } = await this.workOrdersService.createOrUpdateForScan({
+        vehicleId: vehicle.id,
+        scanId: createdScan.id,
+        severity: evaluation.severity,
+        rationale: evaluation.rationale,
+        codes: createdScan.dtcEntries.map((e) => e.code),
+      });
+      workOrderId = creada ? orden.id : null;
+
+      // Avisos solo por órdenes nuevas (una recurrencia no vuelve a avisar):
+      // n8n envía Telegram y correo, y el backend envía el push al celular.
+      // En segundo plano y sin lanzar: si alguno no responde, el escaneo
+      // queda registrado igual, y el aviso de n8n se reenvía desde la orden.
+      if (creada) {
+        void this.n8nService.notificarAlerta(orden.id);
+        void this.pushService.notificarOrden(orden.id);
+      }
+    }
+
+    // 7. Estado del vehículo, respetando las órdenes abiertas.
+    const vehicleStatus = await this.resolveVehicleStatus(
+      vehicle.id,
+      evaluation.vehicleStatus,
+      vehicle.status,
+    );
+
     await this.prisma.vehicle.update({
       where: { id: vehicle.id },
-      data: { status: evaluation.vehicleStatus },
+      data: { status: vehicleStatus },
     });
+
+    // 8. Hipótesis de IA en segundo plano: la llamada al proveedor tarda del
+    //    orden de 15 segundos y el inspector no debe esperar con el teléfono en
+    //    la mano. `processScan` nunca lanza; registra el fallo y deja el
+    //    escaneo reintentable.
+    if (evaluation.requiresAiEvaluation) {
+      void this.diagnosisService.processScan(createdScan.id);
+    }
 
     return {
       scan: {
         ...createdScan,
         vehicle: {
           ...createdScan.vehicle,
-          status: evaluation.vehicleStatus,
+          status: vehicleStatus,
         },
       },
       evaluation,
+      diagnosis: {
+        requested: evaluation.requiresAiEvaluation,
+        status: evaluation.requiresAiEvaluation ? 'generando' : 'no requerida',
+      },
+      workOrderId,
     };
+  }
+
+  private async resolveVehicleStatus(
+    vehicleId: string,
+    calculado: VehicleStatus,
+    actual: VehicleStatus,
+  ): Promise<VehicleStatus> {
+    const abiertas = await this.workOrdersService.countOpenByVehicle(vehicleId);
+    return resolverEstadoVehiculo(calculado, actual, abiertas > 0);
   }
 }

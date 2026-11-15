@@ -1,4 +1,5 @@
 import { Injectable, NotFoundException, ConflictException } from '@nestjs/common';
+import { WorkOrderStatus } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateVehicleDto } from './dto/create-vehicle.dto';
 import { UpdateVehicleDto } from './dto/update-vehicle.dto';
@@ -7,8 +8,14 @@ import { UpdateVehicleDto } from './dto/update-vehicle.dto';
 export class VehiclesService {
   constructor(private readonly prisma: PrismaService) {}
 
-  async findAll() {
+  /**
+   * Vehículos de la flota. Los dados de baja se excluyen salvo que se pidan:
+   * siguen existiendo (con todo su historial) pero ya no forman parte de la
+   * flota que se inspecciona.
+   */
+  async findAll(includeInactive = false) {
     return this.prisma.vehicle.findMany({
+      where: includeInactive ? undefined : { active: true },
       orderBy: { createdAt: 'desc' },
       include: {
         scans: {
@@ -127,16 +134,65 @@ export class VehiclesService {
       data.vin = dto.vin?.trim() ? dto.vin.trim().toUpperCase() : null;
     }
 
+    // Sin esta comprobación, repetir una placa o un VIN terminaba en un error
+    // 500 de la base en lugar de un mensaje que el administrador entienda.
+    if (data.plate) {
+      const otro = await this.prisma.vehicle.findUnique({ where: { plate: data.plate } });
+      if (otro && otro.id !== id) {
+        throw new ConflictException(
+          `Ya existe un vehículo registrado con la placa ${data.plate}`,
+        );
+      }
+    }
+    if (data.vin) {
+      const otro = await this.prisma.vehicle.findUnique({ where: { vin: data.vin } });
+      if (otro && otro.id !== id) {
+        throw new ConflictException(
+          `Ya existe un vehículo registrado con el VIN ${data.vin}`,
+        );
+      }
+    }
+
     return this.prisma.vehicle.update({
       where: { id },
       data,
     });
   }
 
+  /**
+   * Da de baja un vehículo SIN borrarlo.
+   *
+   * Antes era un `DELETE`, y por las claves foráneas en cascada se llevaba
+   * todos los escaneos, hipótesis y órdenes del vehículo: justo el historial
+   * que un sistema de mantenimiento existe para conservar. La baja lógica lo
+   * saca de la flota activa y deja intacto lo demás.
+   */
   async remove(id: string) {
     await this.findOne(id);
-    return this.prisma.vehicle.delete({
+
+    const abiertas = await this.prisma.workOrder.count({
+      where: {
+        vehicleId: id,
+        status: { in: [WorkOrderStatus.OPEN, WorkOrderStatus.IN_PROGRESS] },
+      },
+    });
+    if (abiertas > 0) {
+      throw new ConflictException(
+        'El vehículo tiene órdenes de trabajo abiertas. Ciérrelas antes de darlo de baja.',
+      );
+    }
+
+    return this.prisma.vehicle.update({
       where: { id },
+      data: { active: false },
+    });
+  }
+
+  async reactivate(id: string) {
+    await this.findOne(id);
+    return this.prisma.vehicle.update({
+      where: { id },
+      data: { active: true },
     });
   }
 }
