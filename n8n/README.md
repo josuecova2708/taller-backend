@@ -43,7 +43,7 @@ En cada flujo: menú **⋯ → Import from file**, y luego:
 
 ### `taller-resumen-diario.json`
 
-1. Nodo **Pedir resumen al backend** → reemplazar `CAMBIAR-URL-DEL-BACKEND` por la dirección pública del backend, y en *Credential for Header Auth* crear una con **Name** `X-Service-Key` y **Value** igual a `N8N_SERVICE_KEY`.
+1. Nodo **Pedir resumen al backend** → ya trae la dirección del backend en Azure. En *Credential for Header Auth* crear una con **Name** `X-Service-Key` y **Value** igual a `N8N_SERVICE_KEY`. Espera hasta 60 s y reintenta dos veces, porque el backend puede tardar en despertar si estaba apagado.
 2. Nodo **Enviar por Telegram** → credencial del bot e identificador del chat.
 3. Activar el flujo. Para probarlo sin esperar a las 7:30, usar **Test workflow**.
 

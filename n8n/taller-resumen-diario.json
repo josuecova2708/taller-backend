@@ -16,23 +16,32 @@
       "name": "Lunes a sábado, 7:30",
       "type": "n8n-nodes-base.scheduleTrigger",
       "typeVersion": 1.2,
-      "position": [0, 0]
+      "position": [
+        0,
+        0
+      ]
     },
     {
       "parameters": {
         "method": "GET",
-        "url": "https://CAMBIAR-URL-DEL-BACKEND/api/n8n/daily-summary",
+        "url": "https://taller-backend.proudriver-ee00705b.canadacentral.azurecontainerapps.io/api/n8n/daily-summary",
         "authentication": "genericCredentialType",
         "genericAuthType": "httpHeaderAuth",
         "options": {
-          "timeout": 15000
+          "timeout": 60000
         }
       },
       "id": "b2f0c1d2-0002-4a10-9b02-000000000002",
       "name": "Pedir resumen al backend",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [260, 0]
+      "position": [
+        260,
+        0
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000
     },
     {
       "parameters": {
@@ -46,7 +55,10 @@
       "name": "Enviar por Telegram",
       "type": "n8n-nodes-base.telegram",
       "typeVersion": 1.2,
-      "position": [540, -100]
+      "position": [
+        540,
+        -100
+      ]
     },
     {
       "parameters": {
@@ -63,19 +75,38 @@
       "name": "Enviar por correo",
       "type": "n8n-nodes-base.emailSend",
       "typeVersion": 2.1,
-      "position": [540, 100],
+      "position": [
+        540,
+        100
+      ],
       "disabled": true
     }
   ],
   "connections": {
     "Lunes a sábado, 7:30": {
-      "main": [[{ "node": "Pedir resumen al backend", "type": "main", "index": 0 }]]
+      "main": [
+        [
+          {
+            "node": "Pedir resumen al backend",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     },
     "Pedir resumen al backend": {
       "main": [
         [
-          { "node": "Enviar por Telegram", "type": "main", "index": 0 },
-          { "node": "Enviar por correo", "type": "main", "index": 0 }
+          {
+            "node": "Enviar por Telegram",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Enviar por correo",
+            "type": "main",
+            "index": 0
+          }
         ]
       ]
     }
