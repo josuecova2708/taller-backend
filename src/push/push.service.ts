@@ -1,6 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { UserRole } from '@prisma/client';
+import { Prisma, UserRole } from '@prisma/client';
 import { readFileSync } from 'node:fs';
 import { cert, initializeApp } from 'firebase-admin/app';
 import { getMessaging } from 'firebase-admin/messaging';
@@ -9,6 +9,8 @@ import { Permission, roleHasPermission } from '../auth/permissions';
 import {
   CANAL_ALERTAS,
   construirPush,
+  construirPushCierre,
+  construirPushResponsable,
   leerCuentaServicio,
   MensajePush,
 } from './push.messages';
@@ -120,11 +122,18 @@ export class PushService {
   }
 
   /**
-   * Avisa de una orden de trabajo nueva a los teléfonos de quienes pueden
-   * atenderla: cuentas activas con permiso para ver órdenes (administradores
-   * y mecánicos).
+   * Avisa de una orden de trabajo nueva:
    *
-   * Nunca lanza: devuelve si se envió y, si no, el motivo.
+   * - a quienes pueden atenderla (cuentas activas con permiso para ver
+   *   órdenes: mecánicos y administradores), invitando a tomarla;
+   * - al responsable del vehículo, con un texto propio que abre el escaneo
+   *   (el inspector no ve órdenes).
+   *
+   * Si el responsable también tuviera permiso para ver órdenes, recibe solo
+   * el aviso de mecánicos y administradores.
+   *
+   * Nunca lanza: devuelve si se envió y, si no, el motivo. El resultado es el
+   * del aviso a mecánicos y administradores.
    */
   async notificarOrden(workOrderId: string): Promise<ResultadoPush> {
     try {
@@ -135,30 +144,48 @@ export class PushService {
       const orden = await this.prisma.workOrder.findUnique({
         where: { id: workOrderId },
         include: {
-          vehicle: { select: { plate: true, alias: true } },
+          vehicle: {
+            select: {
+              plate: true,
+              alias: true,
+              responsibleId: true,
+              responsible: { select: { name: true } },
+            },
+          },
           scan: { include: { dtcEntries: { select: { code: true } } } },
         },
       });
       if (!orden) return this.noEnviado('La orden de trabajo no existe.');
 
-      const roles = Object.values(UserRole).filter((rol) =>
-        roleHasPermission(rol, Permission.ORDER_READ),
-      );
+      const roles = this.rolesCon(Permission.ORDER_READ);
       const dispositivos = await this.prisma.device.findMany({
         where: { user: { active: true, role: { in: roles } } },
         select: { token: true },
       });
+      const tokensEquipo = dispositivos.map((d) => d.token);
 
-      const resultado = await this.enviar(
-        dispositivos.map((d) => d.token),
-        construirPush(orden),
-      );
+      const resultado = await this.enviar(tokensEquipo, construirPush(orden));
       if (resultado.enviado) {
         this.logger.log(
           `Push de la orden ${workOrderId} entregado a ` +
             `${resultado.dispositivos} dispositivo(s)`,
         );
       }
+
+      const responsableId = orden.vehicle.responsibleId;
+      if (responsableId) {
+        const propios = await this.prisma.device.findMany({
+          where: { userId: responsableId, user: { active: true } },
+          select: { token: true },
+        });
+        const tokens = propios
+          .map((d) => d.token)
+          .filter((t) => !tokensEquipo.includes(t));
+        if (tokens.length > 0) {
+          await this.enviar(tokens, construirPushResponsable(orden));
+        }
+      }
+
       return resultado;
     } catch (error) {
       this.logger.warn(
@@ -169,6 +196,75 @@ export class PushService {
         'No se pudo conectar con el servicio de notificaciones.',
       );
     }
+  }
+
+  /**
+   * Avisa que una orden se cerró: al responsable del vehículo y a los
+   * administradores (quienes tienen `order:assign`), sin incluir a quien la
+   * cerró, que ya lo sabe.
+   *
+   * Nunca lanza: devuelve si se envió y, si no, el motivo.
+   */
+  async notificarCierre(workOrderId: string): Promise<ResultadoPush> {
+    try {
+      if (!this.obtenerEmisor()) {
+        return this.noEnviado('Las notificaciones push no están configuradas.');
+      }
+
+      const orden = await this.prisma.workOrder.findUnique({
+        where: { id: workOrderId },
+        include: {
+          vehicle: { select: { plate: true, responsibleId: true } },
+          closedBy: { select: { name: true } },
+        },
+      });
+      if (!orden) return this.noEnviado('La orden de trabajo no existe.');
+
+      const destinatarios: Prisma.UserWhereInput[] = [
+        { role: { in: this.rolesCon(Permission.ORDER_ASSIGN) } },
+      ];
+      if (orden.vehicle.responsibleId) {
+        destinatarios.push({ id: orden.vehicle.responsibleId });
+      }
+
+      const dispositivos = await this.prisma.device.findMany({
+        where: {
+          user: {
+            active: true,
+            OR: destinatarios,
+            ...(orden.closedById ? { NOT: { id: orden.closedById } } : {}),
+          },
+        },
+        select: { token: true },
+      });
+
+      const resultado = await this.enviar(
+        dispositivos.map((d) => d.token),
+        construirPushCierre(orden),
+      );
+      if (resultado.enviado) {
+        this.logger.log(
+          `Push del cierre de la orden ${workOrderId} entregado a ` +
+            `${resultado.dispositivos} dispositivo(s)`,
+        );
+      }
+      return resultado;
+    } catch (error) {
+      this.logger.warn(
+        `No se pudo enviar el push del cierre de la orden ${workOrderId}: ` +
+          (error instanceof Error ? error.message : String(error)),
+      );
+      return this.noEnviado(
+        'No se pudo conectar con el servicio de notificaciones.',
+      );
+    }
+  }
+
+  /** Roles que tienen un permiso, según la matriz de `permissions.ts`. */
+  private rolesCon(permiso: (typeof Permission)[keyof typeof Permission]) {
+    return Object.values(UserRole).filter((rol) =>
+      roleHasPermission(rol, permiso),
+    );
   }
 
   /** Push de prueba a los teléfonos de la propia cuenta. */

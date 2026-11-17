@@ -16,7 +16,12 @@ jest.mock('firebase-admin/app', () => ({
 jest.mock('firebase-admin/messaging', () => ({ getMessaging: jest.fn() }));
 
 import { PushService } from './push.service';
-import { construirPush, leerCuentaServicio } from './push.messages';
+import {
+  construirPush,
+  construirPushCierre,
+  construirPushResponsable,
+  leerCuentaServicio,
+} from './push.messages';
 
 const ORDEN = {
   id: 'orden-1',
@@ -35,13 +40,13 @@ const CLAVE = {
 };
 
 describe('Texto del push', () => {
-  it('lleva la placa, la prioridad, un resumen y el id de la orden', () => {
+  it('orden nueva: invita a tomarla, con placa, prioridad y el id de la orden', () => {
     const push = construirPush(ORDEN);
 
-    expect(push.titulo).toBe(
-      '5521-TAC (Camioneta Agrícolas): orden de prioridad crítica',
+    expect(`${push.titulo} ${push.cuerpo}`).toContain(
+      'Nueva orden para 5521-TAC (prioridad crítica). Ábrala para tomarla.',
     );
-    expect(push.cuerpo).toBe('Dos códigos confirmados con recurrencia.');
+    expect(push.cuerpo).toContain('Dos códigos confirmados con recurrencia.');
     expect(push.datos).toEqual({
       tipo: 'orden_creada',
       workOrderId: 'orden-1',
@@ -55,6 +60,40 @@ describe('Texto del push', () => {
 
     expect(push.cuerpo.length).toBeLessThanOrEqual(180);
     expect(push.cuerpo.endsWith('…')).toBe(true);
+  });
+
+  it('al responsable: su vehículo necesita revisión, y abre el escaneo', () => {
+    const push = construirPushResponsable({ ...ORDEN, scanId: 'scan-1' });
+
+    expect(push.titulo).toBe('Su vehículo 5521-TAC necesita revisión en el taller.');
+    expect(push.datos.scanId).toBe('scan-1');
+    // El inspector no puede abrir órdenes: el push no trae la orden.
+    expect(push.datos.workOrderId).toBeUndefined();
+  });
+
+  it('cierre como completada: dice quién la cerró y que vuelve a operar', () => {
+    const push = construirPushCierre({
+      id: 'orden-1',
+      status: 'COMPLETED',
+      vehicle: { plate: '5521-TAC' },
+      closedBy: { name: 'Marta' },
+    });
+
+    expect(push.cuerpo).toBe(
+      'La orden de 5521-TAC fue cerrada por Marta. El vehículo vuelve a estar operativo.',
+    );
+  });
+
+  it('cierre como cancelada: no dice que el vehículo vuelve a operar', () => {
+    const push = construirPushCierre({
+      id: 'orden-1',
+      status: 'CANCELLED',
+      vehicle: { plate: '5521-TAC' },
+      closedBy: { name: 'Ana' },
+    });
+
+    expect(push.cuerpo).toContain('fue cancelada por Ana');
+    expect(push.cuerpo).not.toContain('operativo');
   });
 });
 
@@ -167,6 +206,101 @@ describe('PushService', () => {
     expect(mensaje.notification.title).toContain('5521-TAC');
     expect(mensaje.data.workOrderId).toBe('orden-1');
     expect(mensaje.android.notification.channelId).toBe('alertas');
+  });
+
+  it('orden nueva: también avisa al responsable del vehículo, con su propio texto', async () => {
+    const emisor = emisorQueEntrega();
+    const { servicio, prisma } = crear({ emisor });
+    prisma.workOrder.findUnique.mockResolvedValue({
+      ...ORDEN,
+      scanId: 'scan-1',
+      vehicle: { ...ORDEN.vehicle, responsibleId: 'ins-1', responsible: { name: 'Carlos' } },
+    });
+    prisma.device.findMany
+      .mockResolvedValueOnce([{ token: 't-1' }])
+      .mockResolvedValueOnce([{ token: 't-ins' }]);
+
+    await servicio.notificarOrden('orden-1');
+
+    expect(prisma.device.findMany.mock.calls[1][0].where).toEqual({
+      userId: 'ins-1',
+      user: { active: true },
+    });
+    expect(emisor.sendEachForMulticast).toHaveBeenCalledTimes(2);
+    const alResponsable = emisor.sendEachForMulticast.mock.calls[1][0];
+    expect(alResponsable.tokens).toEqual(['t-ins']);
+    expect(alResponsable.notification.title).toBe(
+      'Su vehículo 5521-TAC necesita revisión en el taller.',
+    );
+    expect(alResponsable.data.scanId).toBe('scan-1');
+  });
+
+  it('orden nueva sin responsable: un solo envío', async () => {
+    const emisor = emisorQueEntrega();
+    const { servicio } = crear({ emisor });
+
+    await servicio.notificarOrden('orden-1');
+
+    expect(emisor.sendEachForMulticast).toHaveBeenCalledTimes(1);
+  });
+
+  it('cierre: avisa al responsable y a los administradores, no a quien cerró', async () => {
+    const emisor = emisorQueEntrega();
+    const { servicio, prisma } = crear({ emisor });
+    prisma.workOrder.findUnique.mockResolvedValue({
+      id: 'orden-1',
+      scanId: 'scan-1',
+      status: 'COMPLETED',
+      closedById: 'mec-1',
+      vehicle: { plate: '5521-TAC', responsibleId: 'ins-1' },
+      closedBy: { name: 'Marta' },
+    });
+
+    const resultado = await servicio.notificarCierre('orden-1');
+
+    expect(resultado.enviado).toBe(true);
+    const filtro = prisma.device.findMany.mock.calls[0][0].where.user;
+    expect(filtro.active).toBe(true);
+    expect(filtro.NOT).toEqual({ id: 'mec-1' });
+    expect(filtro.OR).toEqual([{ role: { in: ['ADMIN'] } }, { id: 'ins-1' }]);
+    expect(emisor.sendEachForMulticast.mock.calls[0][0].notification.body).toContain(
+      'fue cerrada por Marta',
+    );
+  });
+
+  it('cierre de un vehículo sin responsable: solo a los administradores', async () => {
+    const emisor = emisorQueEntrega();
+    const { servicio, prisma } = crear({ emisor });
+    prisma.workOrder.findUnique.mockResolvedValue({
+      id: 'orden-1',
+      status: 'CANCELLED',
+      closedById: 'admin-1',
+      vehicle: { plate: '5521-TAC', responsibleId: null },
+      closedBy: { name: 'Ana' },
+    });
+
+    await servicio.notificarCierre('orden-1');
+
+    const filtro = prisma.device.findMany.mock.calls[0][0].where.user;
+    expect(filtro.OR).toEqual([{ role: { in: ['ADMIN'] } }]);
+  });
+
+  it('el aviso de cierre nunca lanza', async () => {
+    const emisor = {
+      sendEachForMulticast: jest.fn().mockRejectedValue(new Error('sin red')),
+    };
+    const { servicio, prisma } = crear({ emisor });
+    prisma.workOrder.findUnique.mockResolvedValue({
+      id: 'orden-1',
+      status: 'COMPLETED',
+      closedById: 'mec-1',
+      vehicle: { plate: '5521-TAC', responsibleId: null },
+      closedBy: { name: 'Marta' },
+    });
+
+    await expect(servicio.notificarCierre('orden-1')).resolves.toMatchObject({
+      enviado: false,
+    });
   });
 
   it('borra los teléfonos que Firebase informa como inexistentes', async () => {

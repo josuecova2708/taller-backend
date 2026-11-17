@@ -1,8 +1,18 @@
-import { Injectable, NotFoundException, ConflictException } from '@nestjs/common';
-import { WorkOrderStatus } from '@prisma/client';
+import {
+  Injectable,
+  NotFoundException,
+  ConflictException,
+  BadRequestException,
+} from '@nestjs/common';
+import { UserRole, WorkOrderStatus } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateVehicleDto } from './dto/create-vehicle.dto';
 import { UpdateVehicleDto } from './dto/update-vehicle.dto';
+
+/** Lo que sale por la API del responsable de un vehículo. */
+export const RESPONSABLE_PUBLICO = {
+  select: { id: true, name: true, email: true },
+} as const;
 
 @Injectable()
 export class VehiclesService {
@@ -12,12 +22,19 @@ export class VehiclesService {
    * Vehículos de la flota. Los dados de baja se excluyen salvo que se pidan:
    * siguen existiendo (con todo su historial) pero ya no forman parte de la
    * flota que se inspecciona.
+   *
+   * Con `responsableId`, solo los vehículos de los que esa cuenta es
+   * responsable (`GET /vehicles?mine=true`).
    */
-  async findAll(includeInactive = false) {
+  async findAll(includeInactive = false, responsableId?: string) {
     return this.prisma.vehicle.findMany({
-      where: includeInactive ? undefined : { active: true },
+      where: {
+        ...(includeInactive ? {} : { active: true }),
+        ...(responsableId ? { responsibleId: responsableId } : {}),
+      },
       orderBy: { createdAt: 'desc' },
       include: {
+        responsible: RESPONSABLE_PUBLICO,
         scans: {
           orderBy: { scannedAt: 'desc' },
           take: 1,
@@ -40,6 +57,7 @@ export class VehiclesService {
     const vehicle = await this.prisma.vehicle.findUnique({
       where: { id },
       include: {
+        responsible: RESPONSABLE_PUBLICO,
         scans: {
           orderBy: { scannedAt: 'desc' },
           include: {
@@ -112,6 +130,11 @@ export class VehiclesService {
       }
     }
 
+    const responsibleId = dto.responsibleId ?? null;
+    if (responsibleId) {
+      await this.validarResponsable(responsibleId);
+    }
+
     return this.prisma.vehicle.create({
       data: {
         plate,
@@ -121,7 +144,9 @@ export class VehiclesService {
         model: dto.model?.trim() || null,
         year: dto.year ?? null,
         status: dto.status,
+        responsibleId,
       },
+      include: { responsible: RESPONSABLE_PUBLICO },
     });
   }
 
@@ -132,6 +157,14 @@ export class VehiclesService {
     if (dto.plate) data.plate = dto.plate.trim().toUpperCase();
     if (dto.vin !== undefined) {
       data.vin = dto.vin?.trim() ? dto.vin.trim().toUpperCase() : null;
+    }
+
+    // `null` quita el responsable; ausente, no se toca.
+    if (dto.responsibleId !== undefined) {
+      data.responsibleId = dto.responsibleId || null;
+      if (data.responsibleId) {
+        await this.validarResponsable(data.responsibleId);
+      }
     }
 
     // Sin esta comprobación, repetir una placa o un VIN terminaba en un error
@@ -156,6 +189,7 @@ export class VehiclesService {
     return this.prisma.vehicle.update({
       where: { id },
       data,
+      include: { responsible: RESPONSABLE_PUBLICO },
     });
   }
 
@@ -194,5 +228,28 @@ export class VehiclesService {
       where: { id },
       data: { active: true },
     });
+  }
+
+  /**
+   * El responsable de un vehículo es un inspector con la cuenta activa: es
+   * quien recibe el aviso cuando su vehículo necesita revisión.
+   */
+  private async validarResponsable(userId: string): Promise<void> {
+    const usuario = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { id: true, role: true, active: true },
+    });
+
+    if (!usuario) {
+      throw new BadRequestException('El responsable indicado no existe.');
+    }
+    if (!usuario.active) {
+      throw new BadRequestException('El responsable indicado tiene la cuenta desactivada.');
+    }
+    if (usuario.role !== UserRole.INSPECTOR) {
+      throw new BadRequestException(
+        'El responsable de un vehículo debe ser un usuario con rol de inspector.',
+      );
+    }
   }
 }

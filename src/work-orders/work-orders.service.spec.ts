@@ -225,6 +225,7 @@ function construir(orden: any, opciones: { usuario?: any; otrasAbiertas?: number
       update: jest.fn().mockImplementation(({ where, data }) =>
         Promise.resolve({ id: where.id, ...data }),
       ),
+      updateMany: jest.fn().mockResolvedValue({ count: 1 }),
       count: jest.fn().mockResolvedValue(opciones.otrasAbiertas ?? 0),
     },
     user: { findUnique: jest.fn().mockResolvedValue(usuario) },
@@ -272,12 +273,12 @@ describe('WorkOrdersService.advanceStatus', () => {
     expect(prisma.workOrder.update).not.toHaveBeenCalled();
   });
 
-  it('un mecánico no puede avanzar una orden sin asignar', async () => {
+  it('un mecánico no puede avanzar una orden sin asignar: debe tomarla', async () => {
     const { servicio } = construir({ ...abierta, assignedToId: null });
 
     await expect(
       servicio.advanceStatus('orden-1', WorkOrderStatus.IN_PROGRESS, 'x', MECANICO),
-    ).rejects.toThrow('no tiene mecánico asignado');
+    ).rejects.toThrow('Tómela');
   });
 
   it('el administrador puede avanzar cualquier orden', async () => {
@@ -368,16 +369,98 @@ describe('WorkOrdersService.assign', () => {
   });
 });
 
+describe('WorkOrdersService.take', () => {
+  const sinAsignar = {
+    ...abierta,
+    assignedToId: null,
+    assignedTo: null,
+    status: WorkOrderStatus.OPEN,
+    notes: null,
+  };
+
+  it('el mecánico toma una orden sin asignar: queda a su cargo y en proceso', async () => {
+    const { servicio, prisma } = construir(sinAsignar);
+
+    await servicio.take('orden-1', MECANICO);
+
+    const llamada = prisma.workOrder.updateMany.mock.calls[0][0];
+    // Atómico: solo se aplica si sigue abierta y sin asignar.
+    expect(llamada.where).toEqual({
+      id: 'orden-1',
+      status: WorkOrderStatus.OPEN,
+      assignedToId: null,
+    });
+    expect(llamada.data.assignedToId).toBe('mec-1');
+    expect(llamada.data.status).toBe(WorkOrderStatus.IN_PROGRESS);
+    expect(llamada.data.notes).toMatch(
+      /\[\d{4}-\d{2}-\d{2}\] Marta Mecánica tomó la orden\./,
+    );
+  });
+
+  it('si otro mecánico la tomó antes, avisa quién', async () => {
+    const { servicio, prisma } = construir(sinAsignar);
+    prisma.workOrder.updateMany.mockResolvedValue({ count: 0 });
+    prisma.workOrder.findUnique
+      .mockResolvedValueOnce(sinAsignar)
+      .mockResolvedValueOnce({
+        ...sinAsignar,
+        status: WorkOrderStatus.IN_PROGRESS,
+        assignedToId: 'mec-2',
+        assignedTo: { id: 'mec-2', name: 'Pedro' },
+      });
+
+    await expect(servicio.take('orden-1', MECANICO)).rejects.toThrow(
+      'Esta orden ya fue tomada por Pedro',
+    );
+  });
+
+  it('solo un mecánico puede tomar una orden', async () => {
+    const { servicio, prisma } = construir(sinAsignar);
+
+    await expect(servicio.take('orden-1', ADMIN)).rejects.toThrow('Solo un mecánico');
+    await expect(
+      servicio.take('orden-1', { sub: 'ins-1', role: UserRole.INSPECTOR }),
+    ).rejects.toThrow('Solo un mecánico');
+    expect(prisma.workOrder.updateMany).not.toHaveBeenCalled();
+  });
+
+  it('no se puede tomar una orden cerrada', async () => {
+    const cerrada = { ...sinAsignar, status: WorkOrderStatus.COMPLETED };
+    const { servicio, prisma } = construir(cerrada);
+    prisma.workOrder.updateMany.mockResolvedValue({ count: 0 });
+
+    await expect(servicio.take('orden-1', MECANICO)).rejects.toThrow('cerrada');
+  });
+});
+
 describe('WorkOrdersService.close', () => {
-  it('sin autorización, recalcula el estado del vehículo desde su último escaneo', async () => {
-    // Sin este recálculo, un vehículo reparado quedaría en rojo de forma
-    // permanente: mientras hay órdenes abiertas el estado no puede bajar.
+  it('COMPLETED deja el vehículo operativo y lo registra', async () => {
     const { servicio, vehicleStatus, prisma } = construir(abierta);
 
     const resultado = await servicio.close(
       'orden-1',
       WorkOrderStatus.COMPLETED,
-      'Reparación verificada.',
+      'Bobina reemplazada.',
+      MECANICO,
+    );
+
+    expect(resultado.vehicleStatus).toBe(VehicleStatus.OK);
+    expect(resultado.operationAuthorized).toBe(true);
+    expect(prisma.vehicle.update).toHaveBeenCalledWith({
+      where: { id: 'veh-1' },
+      data: { status: VehicleStatus.OK },
+    });
+    expect(prisma.workOrder.update.mock.calls[0][0].data.operationAuthorized).toBe(true);
+    expect(vehicleStatus.recomputeForVehicle).not.toHaveBeenCalled();
+  });
+
+  it('CANCELLED no habilita nada: recalcula desde el último escaneo', async () => {
+    const { servicio, vehicleStatus, prisma } = construir(abierta);
+
+    const resultado = await servicio.close(
+      'orden-1',
+      WorkOrderStatus.CANCELLED,
+      'Orden duplicada.',
       ADMIN,
     );
 
@@ -387,28 +470,7 @@ describe('WorkOrdersService.close', () => {
     expect(prisma.vehicle.update).not.toHaveBeenCalled();
   });
 
-  it('con autorización, el vehículo vuelve a operativo', async () => {
-    const { servicio, vehicleStatus, prisma } = construir(abierta);
-
-    const resultado = await servicio.close(
-      'orden-1',
-      WorkOrderStatus.COMPLETED,
-      'Reparación verificada en ruta.',
-      ADMIN,
-      true,
-    );
-
-    expect(resultado.vehicleStatus).toBe(VehicleStatus.OK);
-    expect(resultado.operationAuthorized).toBe(true);
-    expect(prisma.vehicle.update).toHaveBeenCalledWith({
-      where: { id: 'veh-1' },
-      data: { status: VehicleStatus.OK },
-    });
-    expect(vehicleStatus.recomputeForVehicle).not.toHaveBeenCalled();
-    expect(resultado.orden.notes).toContain('Operación del vehículo autorizada');
-  });
-
-  it('la autorización no pone en verde un vehículo con otras órdenes abiertas', async () => {
+  it('COMPLETED no pone en verde un vehículo con otras órdenes abiertas', async () => {
     const { servicio, prisma } = construir(abierta, { otrasAbiertas: 1 });
 
     const resultado = await servicio.close(
@@ -416,28 +478,47 @@ describe('WorkOrdersService.close', () => {
       WorkOrderStatus.COMPLETED,
       'Reparado.',
       ADMIN,
-      true,
     );
 
     expect(prisma.vehicle.update).not.toHaveBeenCalled();
     expect(resultado.operationAuthorized).toBe(false);
+    expect(resultado.vehicleStatus).toBeNull();
+    // Las otras abiertas se cuentan sin la propia orden.
+    expect(prisma.workOrder.count.mock.calls[0][0].where.id).toEqual({ not: 'orden-1' });
   });
 
-  it('un rol sin vehicle:authorize no puede autorizar la operación', async () => {
-    const { servicio, prisma } = construir(abierta);
-
-    await expect(
-      servicio.close('orden-1', WorkOrderStatus.COMPLETED, 'Listo.', MECANICO, true),
-    ).rejects.toThrow('no puede autorizar');
-    expect(prisma.workOrder.update).not.toHaveBeenCalled();
-  });
-
-  it('no se autoriza la operación al cancelar una orden', async () => {
+  it('el mecánico asignado puede cerrar su orden', async () => {
     const { servicio } = construir(abierta);
 
     await expect(
-      servicio.close('orden-1', WorkOrderStatus.CANCELLED, 'Duplicada.', ADMIN, true),
-    ).rejects.toThrow('completar');
+      servicio.close('orden-1', WorkOrderStatus.COMPLETED, 'Listo.', MECANICO),
+    ).resolves.toBeDefined();
+  });
+
+  it('otro mecánico NO puede cerrar una orden ajena', async () => {
+    const { servicio, prisma } = construir(abierta);
+
+    await expect(
+      servicio.close('orden-1', WorkOrderStatus.COMPLETED, 'Listo.', OTRO_MECANICO),
+    ).rejects.toThrow('asignada a otro mecánico');
+    expect(prisma.workOrder.update).not.toHaveBeenCalled();
+  });
+
+  it('un mecánico no puede cerrar una orden sin asignar', async () => {
+    const { servicio, prisma } = construir({ ...abierta, assignedToId: null });
+
+    await expect(
+      servicio.close('orden-1', WorkOrderStatus.COMPLETED, 'Listo.', MECANICO),
+    ).rejects.toThrow('Tómela');
+    expect(prisma.workOrder.update).not.toHaveBeenCalled();
+  });
+
+  it('el administrador puede cerrar cualquier orden', async () => {
+    const { servicio } = construir({ ...abierta, assignedToId: 'mec-2' });
+
+    await expect(
+      servicio.close('orden-1', WorkOrderStatus.COMPLETED, 'Listo.', ADMIN),
+    ).resolves.toBeDefined();
   });
 
   it('registra quién cerró y cuándo', async () => {

@@ -28,13 +28,17 @@ const ESTADO_ORDEN: Record<string, string> = {
 /** Lo más urgente primero. */
 const ORDEN_PRIORIDAD = ['CRITICAL', 'HIGH', 'MEDIUM', 'LOW'];
 
+/** Responsable del vehículo, tal como lo leen los avisos. */
+export type Responsable = { name: string } | null | undefined;
+
 export interface OrdenParaAviso {
   id: string;
+  scanId?: string;
   priority: string;
   status: string;
   description: string;
   createdAt: Date;
-  vehicle: { plate: string; alias: string | null };
+  vehicle: { plate: string; alias: string | null; responsible?: Responsable };
   assignedTo?: { name: string } | null;
   scan?: { dtcEntries: Array<{ code: string }> } | null;
 }
@@ -42,7 +46,19 @@ export interface OrdenParaAviso {
 export interface VehiculoParaResumen {
   plate: string;
   alias: string | null;
+  responsible?: Responsable;
   scans: Array<{ scannedAt: Date }>;
+}
+
+/** Texto que se usa cuando el vehículo no tiene responsable. */
+export const SIN_RESPONSABLE = 'sin responsable';
+
+export function nombreResponsable(r: Responsable): string {
+  return r?.name ?? SIN_RESPONSABLE;
+}
+
+export function textoPrioridad(priority: string): string {
+  return PRIORIDAD[priority] ?? priority;
 }
 
 function nombreVehiculo(v: { plate: string; alias: string | null }): string {
@@ -60,9 +76,12 @@ export function construirAlerta(orden: OrdenParaAviso, urlBase?: string) {
   const enlace = enlaceOrden(urlBase, orden.id);
   const prioridad = PRIORIDAD[orden.priority] ?? orden.priority;
 
+  const responsable = nombreResponsable(orden.vehicle.responsible);
+
   const lineas = [
     `Nueva orden de trabajo, prioridad ${prioridad}`,
     `Vehículo: ${nombreVehiculo(orden.vehicle)}`,
+    `Responsable: ${responsable}`,
     codigos.length > 0 ? `Códigos de falla: ${codigos.join(', ')}` : null,
     `Motivo: ${orden.description}`,
     enlace ? `Ver la orden: ${enlace}` : null,
@@ -79,7 +98,11 @@ export function construirAlerta(orden: OrdenParaAviso, urlBase?: string) {
       creada: orden.createdAt.toISOString(),
       enlace,
     },
-    vehiculo: { placa: orden.vehicle.plate, alias: orden.vehicle.alias },
+    vehiculo: {
+      placa: orden.vehicle.plate,
+      alias: orden.vehicle.alias,
+      responsable: orden.vehicle.responsible?.name ?? null,
+    },
     codigos,
   };
 }
@@ -104,6 +127,7 @@ export function construirResumen(
     prioridad: PRIORIDAD[o.priority] ?? o.priority,
     estado: ESTADO_ORDEN[o.status] ?? o.status,
     mecanico: o.assignedTo?.name ?? null,
+    responsable: o.vehicle.responsible?.name ?? null,
     diasAbierta: Math.floor((ahora.getTime() - o.createdAt.getTime()) / DIA_MS),
   }));
 
@@ -113,7 +137,12 @@ export function construirResumen(
       const dias = ultimo
         ? Math.floor((ahora.getTime() - ultimo.getTime()) / DIA_MS)
         : null;
-      return { placa: v.plate, alias: v.alias, diasSinEscaneo: dias };
+      return {
+        placa: v.plate,
+        alias: v.alias,
+        responsable: v.responsible?.name ?? null,
+        diasSinEscaneo: dias,
+      };
     })
     .filter((v) => v.diasSinEscaneo === null || v.diasSinEscaneo >= DIAS_SIN_ESCANEO)
     // Los nunca escaneados primero; después, los más atrasados.
@@ -143,7 +172,8 @@ export function construirResumen(
           : `${o.diasAbierta} ${o.diasAbierta === 1 ? 'día' : 'días'}`;
       lineas.push(
         `- ${o.placa}: prioridad ${o.prioridad}, ${o.estado}, ` +
-          `${o.mecanico ?? 'sin mecánico asignado'}, ${dias}`,
+          `${o.mecanico ?? 'sin mecánico asignado'}, ${dias} ` +
+          `(responsable: ${o.responsable ?? SIN_RESPONSABLE})`,
       );
     }
   }
@@ -158,7 +188,8 @@ export function construirResumen(
         `- ${v.placa}: ` +
           (v.diasSinEscaneo === null
             ? 'nunca fue escaneado'
-            : `${v.diasSinEscaneo} días sin escaneo`),
+            : `${v.diasSinEscaneo} días sin escaneo`) +
+          ` (responsable: ${v.responsable ?? SIN_RESPONSABLE})`,
       );
     }
   }

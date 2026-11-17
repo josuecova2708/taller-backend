@@ -79,6 +79,11 @@ export interface EntradaOrden {
   codes: string[];
 }
 
+/** El vehículo de la orden, con su responsable. */
+const VEHICULO_CON_RESPONSABLE = {
+  include: { responsible: { select: { id: true, name: true, email: true } } },
+} as const;
+
 @Injectable()
 export class WorkOrdersService {
   private readonly logger = new Logger(WorkOrdersService.name);
@@ -92,7 +97,7 @@ export class WorkOrdersService {
     return this.prisma.workOrder.findMany({
       orderBy: { createdAt: 'desc' },
       include: {
-        vehicle: true,
+        vehicle: VEHICULO_CON_RESPONSABLE,
         diagnosis: true,
         scan: { include: { dtcEntries: true } },
         assignedTo: {
@@ -107,7 +112,7 @@ export class WorkOrdersService {
     const orden = await this.prisma.workOrder.findUnique({
       where: { id },
       include: {
-        vehicle: true,
+        vehicle: VEHICULO_CON_RESPONSABLE,
         diagnosis: true,
         scan: { include: { dtcEntries: true } },
         assignedTo: {
@@ -305,15 +310,66 @@ export class WorkOrdersService {
   }
 
   /**
-   * Avanza la orden entre estados no terminales (OPEN <-> IN_PROGRESS).
+   * Un mecánico toma por su cuenta una orden abierta y sin asignar.
    *
-   * Es la operación del mecánico: puede registrar que empezó a trabajar y
-   * dejar notas, pero no cerrar la orden. Cerrarla habilita al vehículo a
-   * volver a operar y es una decisión con otro nivel de responsabilidad
-   * (permiso `order:close`), por eso vive en otro endpoint.
+   * La orden queda asignada a él y pasa a IN_PROGRESS, con una nota en el
+   * historial. Es atómico: la actualización solo se aplica si la orden sigue
+   * OPEN y sin asignar en ese instante, así dos mecánicos que tocan «Tomar»
+   * a la vez no se quedan ambos con la misma orden. El segundo recibe un 409
+   * que dice quién la tomó.
+   *
+   * Solo para el rol MECHANIC: el administrador asigna con `assign`.
+   */
+  async take(id: string, actor: Actor): Promise<WorkOrder> {
+    if (actor.role !== UserRole.MECHANIC) {
+      throw new ForbiddenException(
+        'Solo un mecánico puede tomar una orden. El administrador la asigna desde «Asignación».',
+      );
+    }
+
+    const orden = await this.findOne(id);
+    const autor = await this.nombreDe(actor.sub);
+
+    const { count } = await this.prisma.workOrder.updateMany({
+      where: { id, status: WorkOrderStatus.OPEN, assignedToId: null },
+      data: {
+        assignedToId: actor.sub,
+        status: WorkOrderStatus.IN_PROGRESS,
+        notes: agregarNota(orden.notes, `[${hoy()}] ${autor} tomó la orden.`),
+      },
+    });
+
+    if (count === 0) {
+      // Otro la tomó (o la cerraron) entre la lectura y la escritura: se
+      // vuelve a leer para explicar qué pasó.
+      const actual = await this.findOne(id);
+      if (!ESTADOS_ABIERTOS.includes(actual.status)) {
+        throw new ConflictException(`La orden ya está cerrada (${actual.status}).`);
+      }
+      if (actual.assignedTo) {
+        throw new ConflictException(
+          actual.assignedTo.id === actor.sub
+            ? 'Usted ya tomó esta orden.'
+            : `Esta orden ya fue tomada por ${actual.assignedTo.name}.`,
+        );
+      }
+      throw new ConflictException(
+        'Esta orden ya está en proceso y no puede tomarse.',
+      );
+    }
+
+    this.logger.log(`Orden ${id} tomada por ${actor.sub}`);
+    return this.findOne(id);
+  }
+
+  /**
+   * Avanza la orden entre estados no terminales (OPEN <-> IN_PROGRESS) y
+   * registra notas de avance.
    *
    * Solo el mecánico ASIGNADO puede avanzarla. Quien administra las órdenes
-   * (permiso `order:assign`) también, para poder destrabar una orden.
+   * (permiso `order:assign`) también, para poder destrabar una orden. El
+   * cierre vive en otro endpoint porque exige una justificación y decide el
+   * estado del vehículo.
    *
    * La nota se AGREGA al historial con fecha y autor: antes reemplazaba todo
    * el campo, y un mecánico podía borrar sin querer lo que escribió otro.
@@ -340,7 +396,7 @@ export class WorkOrdersService {
       throw new ForbiddenException(
         orden.assignedToId
           ? 'Esta orden está asignada a otro mecánico.'
-          : 'Esta orden todavía no tiene mecánico asignado. Solicite la asignación al administrador.',
+          : 'Esta orden todavía no tiene mecánico asignado. Tómela antes de registrar avances.',
       );
     }
 
@@ -357,14 +413,16 @@ export class WorkOrdersService {
   /**
    * Cierra la orden y decide el estado del vehículo.
    *
-   * Cerrar y autorizar son dos decisiones distintas:
+   * Quién puede: el mecánico solo la orden que tiene asignada; quien
+   * administra las órdenes (`order:assign`), cualquiera. La justificación es
+   * obligatoria y no se exige un escaneo de verificación (el mecánico puede
+   * hacerlo si quiere).
    *
-   * - Sin autorización, el estado se recalcula desde el último escaneo. Si ese
-   *   escaneo sigue siendo crítico, el vehículo permanece crítico hasta que un
-   *   escaneo posterior confirme la reparación.
-   * - Con autorización (`vehicle:authorize`), el responsable asume formalmente
-   *   que el vehículo puede volver a operar y pasa a OK. Queda registrado
-   *   quién lo autorizó y cuándo.
+   * - COMPLETED: el vehículo vuelve a OK y la orden queda con
+   *   `operationAuthorized = true`. `closedById`, `closedAt` y la nota de
+   *   cierre registran quién responde por la reparación.
+   * - CANCELLED: no habilita nada; el estado se recalcula desde el último
+   *   escaneo (`recomputeForVehicle`).
    *
    * En ambos casos, si al vehículo le quedan otras órdenes abiertas su estado
    * no cambia: la condición sigue sin resolverse.
@@ -374,7 +432,6 @@ export class WorkOrdersService {
     status: WorkOrderStatus,
     resolution: string,
     actor: Actor,
-    authorizeOperation = false,
   ): Promise<{
     orden: WorkOrder;
     vehicleStatus: VehicleStatus | null;
@@ -386,32 +443,38 @@ export class WorkOrdersService {
       throw new ConflictException(`La orden ya está cerrada (${orden.status}).`);
     }
 
+    const administra = roleHasPermission(
+      actor.role as UserRole,
+      Permission.ORDER_ASSIGN,
+    );
+    if (!administra && orden.assignedToId !== actor.sub) {
+      throw new ForbiddenException(
+        orden.assignedToId
+          ? 'Esta orden está asignada a otro mecánico. Solo esa persona puede cerrarla.'
+          : 'Esta orden todavía no tiene mecánico asignado. Tómela antes de cerrarla.',
+      );
+    }
+
     const justificacion = resolution?.trim();
     if (!justificacion) {
       throw new BadRequestException('La nota de cierre es obligatoria.');
     }
 
-    if (authorizeOperation) {
-      if (
-        !roleHasPermission(actor.role as UserRole, Permission.VEHICLE_AUTHORIZE)
-      ) {
-        throw new ForbiddenException(
-          'Su rol no puede autorizar la operación del vehículo.',
-        );
-      }
-      if (status !== WorkOrderStatus.COMPLETED) {
-        throw new BadRequestException(
-          'Solo se puede autorizar la operación al completar la orden, no al cancelarla.',
-        );
-      }
-    }
-
+    const completada = status === WorkOrderStatus.COMPLETED;
     const autor = await this.nombreDe(actor.sub);
     const notas = agregarNota(
       orden.notes,
-      `[${hoy()}] Cierre (${status}) por ${autor}: ${justificacion}` +
-        (authorizeOperation ? ' — Operación del vehículo autorizada.' : ''),
+      `[${hoy()}] Cierre (${status}) por ${autor}: ${justificacion}`,
     );
+
+    const otrasAbiertas = await this.prisma.workOrder.count({
+      where: {
+        vehicleId: orden.vehicleId,
+        id: { not: id },
+        status: { in: ESTADOS_ABIERTOS },
+      },
+    });
+    const habilita = completada && otrasAbiertas === 0;
 
     const cerrada = await this.prisma.workOrder.update({
       where: { id },
@@ -420,19 +483,20 @@ export class WorkOrdersService {
         notes: notas,
         closedById: actor.sub,
         closedAt: new Date(),
-        operationAuthorized: authorizeOperation,
+        operationAuthorized: habilita,
       },
     });
 
     let vehicleStatus: VehicleStatus | null;
-    const otrasAbiertas = await this.countOpenByVehicle(orden.vehicleId);
-
-    if (authorizeOperation && otrasAbiertas === 0) {
+    if (habilita) {
       await this.prisma.vehicle.update({
         where: { id: orden.vehicleId },
         data: { status: VehicleStatus.OK },
       });
       vehicleStatus = VehicleStatus.OK;
+    } else if (completada) {
+      // Quedan otras órdenes abiertas: el vehículo conserva su estado.
+      vehicleStatus = null;
     } else {
       vehicleStatus = await this.vehicleStatusService.recomputeForVehicle(
         orden.vehicleId,
@@ -440,16 +504,11 @@ export class WorkOrdersService {
     }
 
     this.logger.log(
-      `Orden ${id} cerrada como ${status} por ${actor.sub}` +
-        `${authorizeOperation ? ' con autorización de operación' : ''}. ` +
+      `Orden ${id} cerrada como ${status} por ${actor.sub}. ` +
         `Estado del vehículo: ${vehicleStatus ?? 'sin cambios'}.`,
     );
 
-    return {
-      orden: cerrada,
-      vehicleStatus,
-      operationAuthorized: authorizeOperation && otrasAbiertas === 0,
-    };
+    return { orden: cerrada, vehicleStatus, operationAuthorized: habilita };
   }
 
   /**

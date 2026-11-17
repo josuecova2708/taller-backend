@@ -49,7 +49,13 @@ export class N8nService {
       const orden = await this.prisma.workOrder.findUnique({
         where: { id: workOrderId },
         include: {
-          vehicle: { select: { plate: true, alias: true } },
+          vehicle: {
+            select: {
+              plate: true,
+              alias: true,
+              responsible: { select: { name: true } },
+            },
+          },
           assignedTo: { select: { name: true } },
           scan: { include: { dtcEntries: { select: { code: true } } } },
         },
@@ -100,7 +106,13 @@ export class N8nService {
       this.prisma.workOrder.findMany({
         where: { status: { in: [WorkOrderStatus.OPEN, WorkOrderStatus.IN_PROGRESS] } },
         include: {
-          vehicle: { select: { plate: true, alias: true } },
+          vehicle: {
+            select: {
+              plate: true,
+              alias: true,
+              responsible: { select: { name: true } },
+            },
+          },
           assignedTo: { select: { name: true } },
         },
       }),
@@ -109,6 +121,7 @@ export class N8nService {
         select: {
           plate: true,
           alias: true,
+          responsible: { select: { name: true } },
           scans: {
             orderBy: { scannedAt: 'desc' },
             take: 1,

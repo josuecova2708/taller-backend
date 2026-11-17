@@ -3,7 +3,7 @@
  *
  * Funciones puras, sin Nest ni Firebase, para poder probarlas solas.
  */
-import { construirAlerta, OrdenParaAviso } from '../n8n/n8n.messages';
+import { OrdenParaAviso, textoPrioridad } from '../n8n/n8n.messages';
 
 /** Canal de Android en el que se muestran los avisos. Lo crea la app. */
 export const CANAL_ALERTAS = 'alertas';
@@ -26,23 +26,79 @@ function recortar(texto: string, maximo: number): string {
 }
 
 /**
- * Push de una orden de trabajo nueva (CU18): placa, prioridad y un resumen.
- * Toma la prioridad ya redactada del aviso por n8n para que digan lo mismo.
+ * Push de una orden de trabajo nueva (CU18) para mecánicos y administradores:
+ * invita a abrirla y tomarla. El cuerpo lleva el motivo resumido.
  */
 export function construirPush(orden: OrdenParaAviso): MensajePush {
-  const alerta = construirAlerta(orden);
-  const vehiculo = orden.vehicle.alias
-    ? `${orden.vehicle.plate} (${orden.vehicle.alias})`
-    : orden.vehicle.plate;
+  const prioridad = textoPrioridad(orden.priority);
 
   return {
-    titulo: `${vehiculo}: orden de prioridad ${alerta.orden.prioridad}`,
-    cuerpo: recortar(orden.description, LARGO_MAXIMO),
+    // Título corto para que no lo corte la pantalla bloqueada; el cuerpo
+    // completa la frase y agrega el motivo.
+    titulo: `Nueva orden para ${orden.vehicle.plate} (prioridad ${prioridad}).`,
+    cuerpo: recortar(`Ábrala para tomarla. ${orden.description}`, LARGO_MAXIMO),
     datos: {
       tipo: 'orden_creada',
       workOrderId: orden.id,
       placa: orden.vehicle.plate,
       prioridad: orden.priority,
+    },
+  };
+}
+
+/**
+ * Push de una orden nueva para el responsable del vehículo.
+ *
+ * Lleva el escaneo y no la orden: el inspector no puede ver órdenes, pero sí
+ * el escaneo y su hipótesis. Por eso el tipo es otro y no trae `workOrderId`.
+ */
+export function construirPushResponsable(orden: OrdenParaAviso): MensajePush {
+  const vehiculo = orden.vehicle.alias
+    ? `${orden.vehicle.plate} (${orden.vehicle.alias})`
+    : orden.vehicle.plate;
+
+  return {
+    titulo: `Su vehículo ${orden.vehicle.plate} necesita revisión en el taller.`,
+    cuerpo: recortar(`${vehiculo}: ${orden.description}`, LARGO_MAXIMO),
+    datos: {
+      tipo: 'vehiculo_requiere_revision',
+      placa: orden.vehicle.plate,
+      ...(orden.scanId ? { scanId: orden.scanId } : {}),
+    },
+  };
+}
+
+/** Lo mínimo de una orden cerrada para redactar su aviso. */
+export interface OrdenCerrada {
+  id: string;
+  scanId?: string;
+  status: string;
+  vehicle: { plate: string };
+  closedBy?: { name: string } | null;
+}
+
+/**
+ * Push de una orden cerrada, para el responsable y los administradores.
+ * Si se canceló, no dice que el vehículo vuelve a operar.
+ */
+export function construirPushCierre(orden: OrdenCerrada): MensajePush {
+  const quien = orden.closedBy?.name ?? 'un usuario';
+  const cancelada = orden.status === 'CANCELLED';
+
+  return {
+    titulo: cancelada
+      ? `Orden de ${orden.vehicle.plate} cancelada`
+      : `Orden de ${orden.vehicle.plate} cerrada`,
+    cuerpo: cancelada
+      ? `La orden de ${orden.vehicle.plate} fue cancelada por ${quien}. ` +
+        'El estado del vehículo se mantiene según su último escaneo.'
+      : `La orden de ${orden.vehicle.plate} fue cerrada por ${quien}. ` +
+        'El vehículo vuelve a estar operativo.',
+    datos: {
+      tipo: 'orden_cerrada',
+      placa: orden.vehicle.plate,
+      estado: orden.status,
+      ...(orden.scanId ? { scanId: orden.scanId } : {}),
     },
   };
 }

@@ -172,6 +172,17 @@ export class AuthService {
       data,
       select: CAMPOS_PUBLICOS,
     });
+
+    // Solo un inspector puede ser responsable de un vehículo: si deja de
+    // serlo, sus vehículos quedan sin responsable.
+    if (
+      data.role !== undefined &&
+      usuario.role === UserRole.INSPECTOR &&
+      data.role !== UserRole.INSPECTOR
+    ) {
+      await this.liberarVehiculos(id);
+    }
+
     return { ...actualizado, roleLabel: ROLE_LABELS[actualizado.role] };
   }
 
@@ -196,6 +207,13 @@ export class AuthService {
       data: { active },
       select: CAMPOS_PUBLICOS,
     });
+
+    // Una cuenta desactivada no recibe avisos: sus vehículos quedan sin
+    // responsable para que el administrador les asigne otro.
+    if (!active) {
+      await this.liberarVehiculos(id);
+    }
+
     return { ...actualizado, roleLabel: ROLE_LABELS[actualizado.role] };
   }
 
@@ -213,6 +231,14 @@ export class AuthService {
       throw new NotFoundException('El usuario indicado no existe.');
     }
     return usuario;
+  }
+
+  /** Deja sin responsable los vehículos de una cuenta. */
+  private async liberarVehiculos(userId: string): Promise<void> {
+    await this.prisma.vehicle.updateMany({
+      where: { responsibleId: userId },
+      data: { responsibleId: null },
+    });
   }
 
   private async exigirSinOrdenesAbiertas(userId: string, accion: string) {

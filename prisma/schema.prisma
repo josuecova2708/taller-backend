@@ -60,6 +60,8 @@ model User {
   workOrders   WorkOrder[] @relation("AssignedTo")
   closedOrders WorkOrder[] @relation("ClosedBy")
   devices      Device[]
+  /// Vehículos de los que esta cuenta (un inspector) es responsable.
+  responsibleFor Vehicle[] @relation("ResponsibleFor")
 
   @@map("users")
 }
@@ -92,10 +94,14 @@ model Vehicle {
   status    VehicleStatus @default(OK)
   active    Boolean       @default(true)
   createdAt DateTime      @default(now())
+  /// Inspector responsable del vehículo: recibe los avisos de sus órdenes.
+  responsibleId String?
 
-  scans      Scan[]
-  workOrders WorkOrder[]
+  responsible User?       @relation("ResponsibleFor", fields: [responsibleId], references: [id], onDelete: SetNull)
+  scans       Scan[]
+  workOrders  WorkOrder[]
 
+  @@index([responsibleId])
   @@map("vehicles")
 }
 

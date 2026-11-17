@@ -40,9 +40,20 @@ export class WorkOrdersController {
   }
 
   /**
+   * Un mecánico toma una orden abierta y sin asignar: queda a su cargo y en
+   * proceso. Si otro la tomó antes, responde 409 con su nombre.
+   */
+  @RequirePermission(Permission.ORDER_UPDATE_STATUS)
+  @HttpCode(HttpStatus.OK)
+  @Post(':id/take')
+  take(@Param('id') id: string, @GetUser() actor: Actor) {
+    return this.workOrdersService.take(id, actor);
+  }
+
+  /**
    * Avance de la orden entre estados no terminales.
    *
-   * Operación del mecánico: registrar que empezó a trabajar y dejar notas.
+   * Operación del mecánico asignado: registrar que trabaja y dejar notas.
    */
   @RequirePermission(Permission.ORDER_UPDATE_STATUS)
   @Patch(':id/status')
@@ -55,30 +66,31 @@ export class WorkOrdersController {
   }
 
   /**
-   * Cierre de la orden.
+   * Cierre de la orden, con justificación obligatoria.
    *
-   * Endpoint separado del avance a propósito: el permiso `order:close` no lo
-   * tiene el mecánico. Cerrar una orden es lo que habilita al vehículo a volver
-   * a operar, y esa es la decisión humana que el sistema nunca automatiza.
+   * El mecánico cierra la orden que tiene asignada y el administrador
+   * cualquiera (el servicio lo comprueba). Cerrarla como completada devuelve
+   * el vehículo a operativo: es la decisión humana que el sistema nunca
+   * automatiza, y queda registrado quién la tomó.
    *
-   * La separación vive en la superficie de la API y no en una validación
-   * interna: así el permiso que falta se ve en el 403, no en un mensaje de
-   * error de dominio.
+   * Después avisa al responsable del vehículo y a los administradores, en
+   * segundo plano y sin condicionar la respuesta.
    */
   @RequirePermission(Permission.ORDER_CLOSE)
   @Post(':id/close')
-  close(
+  async close(
     @Param('id') id: string,
     @Body() dto: CloseWorkOrderDto,
     @GetUser() actor: Actor,
   ) {
-    return this.workOrdersService.close(
+    const resultado = await this.workOrdersService.close(
       id,
       dto.status,
       dto.resolution,
       actor,
-      dto.authorizeOperation ?? false,
     );
+    void this.pushService.notificarCierre(id);
+    return resultado;
   }
 
   /**

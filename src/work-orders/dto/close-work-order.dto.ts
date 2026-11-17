@@ -1,14 +1,7 @@
-import {
-  IsBoolean,
-  IsEnum,
-  IsNotEmpty,
-  IsOptional,
-  IsString,
-  MaxLength,
-} from 'class-validator';
+import { IsEnum, IsNotEmpty, IsString, MaxLength } from 'class-validator';
 import { WorkOrderStatus } from '@prisma/client';
 
-/** Estados terminales: cerrar la orden es una decisión formal. */
+/** Estados terminales con los que se cierra una orden. */
 export const ESTADOS_TERMINALES = [
   WorkOrderStatus.COMPLETED,
   WorkOrderStatus.CANCELLED,
@@ -21,20 +14,12 @@ export class CloseWorkOrderDto {
   status: (typeof ESTADOS_TERMINALES)[number];
 
   /**
-   * Justificación del cierre. Obligatoria: cerrar una orden es la decisión que
-   * habilita al vehículo a volver a operar, y debe quedar registrada.
+   * Justificación del cierre. Obligatoria: cerrar una orden como completada
+   * devuelve el vehículo a operativo, y queda registrado quién lo decidió y
+   * por qué.
    */
   @IsString()
   @IsNotEmpty({ message: 'La nota de cierre es obligatoria.' })
   @MaxLength(2000)
   resolution: string;
-
-  /**
-   * Autoriza formalmente que el vehículo vuelva a operar (permiso
-   * `vehicle:authorize`). Es una decisión aparte del cierre: una orden puede
-   * cerrarse sin que el vehículo quede habilitado.
-   */
-  @IsOptional()
-  @IsBoolean()
-  authorizeOperation?: boolean;
 }

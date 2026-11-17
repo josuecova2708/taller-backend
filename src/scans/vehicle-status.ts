@@ -16,7 +16,8 @@ export const ORDEN_ESTADOS: VehicleStatus[] = [
  * desconecte la batería. Con una orden abierta, el estado no puede bajar; se
  * conserva el más grave entre el calculado y el actual.
  *
- * Cerrar la orden es una decisión humana (permiso `order:close`), y es ahí
+ * Cerrar la orden como completada es una decisión humana (permiso
+ * `order:close`, del mecánico que la atendió o del administrador), y es ahí
  * donde el vehículo vuelve a OK.
  *
  * Vive en su propio archivo, sin decoradores ni inyección, para poder probarse

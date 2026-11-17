@@ -24,6 +24,10 @@ jest.mock('../push/push.service', () => ({ PushService: class {} }));
 
 import { BadRequestException } from '@nestjs/common';
 import { ScansService } from './scans.service';
+import {
+  DIAS_GRACIA_TRAS_REPARACION,
+  pareceSecuelaDeReparacion,
+} from './post-reparacion';
 
 describe('ScansService.create', () => {
   const USER_ID = 'user-1';
@@ -69,6 +73,7 @@ describe('ScansService.create', () => {
         findMany: jest.fn().mockResolvedValue([]),
         create: jest.fn().mockResolvedValue(ESCANEO),
       },
+      workOrder: { findFirst: jest.fn().mockResolvedValue(null) },
     };
     filterService = { evaluateScan: jest.fn() };
     diagnosisService = { processScan: jest.fn().mockResolvedValue(undefined) };
@@ -151,5 +156,110 @@ describe('ScansService.create', () => {
     expect(pushService.notificarOrden).not.toHaveBeenCalled();
     expect(diagnosisService.processScan).toHaveBeenCalledWith(ESCANEO.id);
     expect(resultado.workOrderId).toBeNull();
+  });
+
+  describe('falsa alarma tras una reparación reciente', () => {
+    const PERMANENTE: any = {
+      vehicleId: VEHICULO.id,
+      dtcs: [{ code: 'p0300', type: 'PERMANENT' }],
+      readinessStatus: { monitorsCompleted: false, incompleteMonitors: ['CAT'] },
+    };
+    const haceDias = (d: number) => new Date(Date.now() - d * 24 * 60 * 60 * 1000);
+
+    beforeEach(() => {
+      // Lo que el filtro dice de un permanente con monitores incompletos.
+      filterService.evaluateScan.mockReturnValue({
+        requiresAiEvaluation: true,
+        severity: 'MEDIUM',
+        rationale: 'Código PERMANENTE con monitores incompletos.',
+        vehicleStatus: 'ALERT',
+      });
+    });
+
+    it('con una orden completada hace pocos días: no abre orden ni pide IA', async () => {
+      prisma.workOrder.findFirst.mockResolvedValue({ closedAt: haceDias(3) });
+
+      const resultado = await service.create(PERMANENTE, USER_ID);
+
+      expect(workOrdersService.createOrUpdateForScan).not.toHaveBeenCalled();
+      expect(diagnosisService.processScan).not.toHaveBeenCalled();
+      expect(n8nService.notificarAlerta).not.toHaveBeenCalled();
+      expect(resultado.workOrderId).toBeNull();
+      expect(resultado.evaluation.vehicleStatus).toBe('ALERT');
+      expect(resultado.evaluation.severity).toBe('LOW');
+      expect(resultado.evaluation.rationale).toContain('reparación reciente');
+
+      const guardado = prisma.scan.create.mock.calls[0][0].data;
+      expect(guardado.rationale).toContain('reparación reciente');
+      expect(guardado.severity).toBe('LOW');
+
+      // Solo busca reparaciones completadas dentro de la ventana.
+      const filtro = prisma.workOrder.findFirst.mock.calls[0][0].where;
+      expect(filtro.status).toBe('COMPLETED');
+      const desde: Date = filtro.closedAt.gte;
+      const dias = (Date.now() - desde.getTime()) / (24 * 60 * 60 * 1000);
+      expect(Math.round(dias)).toBe(DIAS_GRACIA_TRAS_REPARACION);
+    });
+
+    it('sin reparación reciente: sigue las reglas de siempre', async () => {
+      prisma.workOrder.findFirst.mockResolvedValue(null);
+      workOrdersService.createOrUpdateForScan.mockResolvedValue({
+        orden: { id: 'wo-2' },
+        creada: true,
+      });
+
+      const resultado = await service.create(PERMANENTE, USER_ID);
+
+      expect(workOrdersService.createOrUpdateForScan).toHaveBeenCalled();
+      expect(resultado.workOrderId).toBe('wo-2');
+    });
+
+    it('un código CONFIRMED o PENDING no entra en la excepción', async () => {
+      workOrdersService.createOrUpdateForScan.mockResolvedValue({
+        orden: { id: 'wo-3' },
+        creada: true,
+      });
+
+      await service.create(
+        {
+          ...PERMANENTE,
+          dtcs: [
+            { code: 'P0300', type: 'PERMANENT' },
+            { code: 'P0171', type: 'PENDING' },
+          ],
+        },
+        USER_ID,
+      );
+
+      expect(prisma.workOrder.findFirst).not.toHaveBeenCalled();
+      expect(workOrdersService.createOrUpdateForScan).toHaveBeenCalled();
+    });
+
+    it('con los monitores completos no entra en la excepción', async () => {
+      workOrdersService.createOrUpdateForScan.mockResolvedValue({
+        orden: { id: 'wo-4' },
+        creada: true,
+      });
+
+      await service.create(
+        { ...PERMANENTE, readinessStatus: { monitorsCompleted: true } },
+        USER_ID,
+      );
+
+      expect(prisma.workOrder.findFirst).not.toHaveBeenCalled();
+      expect(workOrdersService.createOrUpdateForScan).toHaveBeenCalled();
+    });
+  });
+});
+
+describe('pareceSecuelaDeReparacion', () => {
+  it('solo permanentes con monitores incompletos', () => {
+    expect(pareceSecuelaDeReparacion([{ type: 'PERMANENT' }], false)).toBe(true);
+    expect(pareceSecuelaDeReparacion([{ type: 'PERMANENT' }], true)).toBe(false);
+    expect(pareceSecuelaDeReparacion([{ type: 'PERMANENT' }], undefined)).toBe(false);
+    expect(
+      pareceSecuelaDeReparacion([{ type: 'PERMANENT' }, { type: 'CONFIRMED' }], false),
+    ).toBe(false);
+    expect(pareceSecuelaDeReparacion([], false)).toBe(false);
   });
 });

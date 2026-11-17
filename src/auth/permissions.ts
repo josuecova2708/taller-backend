@@ -30,9 +30,6 @@ export const Permission = {
   ORDER_UPDATE_STATUS: 'order:update_status',
   ORDER_CLOSE: 'order:close',
 
-  // Decisión formal sobre la operación del vehículo (validación humana)
-  VEHICLE_AUTHORIZE: 'vehicle:authorize',
-
   // Reportes PDF
   REPORT_EXPORT: 'report:export',
 } as const;
@@ -42,14 +39,22 @@ export type PermissionValue = (typeof Permission)[keyof typeof Permission];
 /**
  * Matriz rol → permisos.
  *
- * Separación de deberes clave: MECHANIC puede AVANZAR una orden
- * (`ORDER_UPDATE_STATUS`) pero no CERRARLA (`ORDER_CLOSE`) ni autorizar la
- * operación del vehículo (`VEHICLE_AUTHORIZE`). Esa decisión formal queda
- * reservada, hoy, a ADMIN.
+ * Reparto de responsabilidades:
+ *
+ * - MECHANIC toma por su cuenta una orden sin asignar, la trabaja
+ *   (`ORDER_UPDATE_STATUS`) y la cierra (`ORDER_CLOSE`). Solo puede cerrar la
+ *   orden que tiene asignada: el servicio lo comprueba. Cerrarla como
+ *   completada devuelve el vehículo a operativo, y queda registrado quién la
+ *   cerró, cuándo y con qué justificación: esa es la trazabilidad de quién
+ *   responde por la reparación.
+ * - ADMIN conserva la asignación manual (`ORDER_ASSIGN`) para repartir o
+ *   destrabar órdenes, y puede cerrar cualquiera.
+ * - INSPECTOR escanea y puede leer la hipótesis de IA de sus escaneos
+ *   (`DIAGNOSIS_READ`), pero no ve ni gestiona órdenes.
  *
  * Si la institución define un encargado de flota distinto del administrador,
- * agregar `SUPERVISOR` al enum `UserRole` y una entrada aquí con
- * ORDER_CLOSE + VEHICLE_AUTHORIZE: ningún controlador cambia.
+ * se agrega `SUPERVISOR` al enum `UserRole` y una entrada aquí: ningún
+ * controlador cambia.
  */
 export const ROLE_PERMISSIONS: Record<UserRole, readonly PermissionValue[]> = {
   [UserRole.ADMIN]: [
@@ -64,7 +69,6 @@ export const ROLE_PERMISSIONS: Record<UserRole, readonly PermissionValue[]> = {
     Permission.ORDER_ASSIGN,
     Permission.ORDER_UPDATE_STATUS,
     Permission.ORDER_CLOSE,
-    Permission.VEHICLE_AUTHORIZE,
     Permission.REPORT_EXPORT,
   ],
   [UserRole.MECHANIC]: [
@@ -74,12 +78,14 @@ export const ROLE_PERMISSIONS: Record<UserRole, readonly PermissionValue[]> = {
     Permission.DIAGNOSIS_READ,
     Permission.ORDER_READ,
     Permission.ORDER_UPDATE_STATUS,
+    Permission.ORDER_CLOSE,
     Permission.REPORT_EXPORT,
   ],
   [UserRole.INSPECTOR]: [
     Permission.VEHICLE_READ,
     Permission.SCAN_READ,
     Permission.SCAN_CREATE,
+    Permission.DIAGNOSIS_READ,
   ],
 };
 

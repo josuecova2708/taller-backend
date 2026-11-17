@@ -1,4 +1,4 @@
-import { IsString, IsOptional, IsInt, Min, Max, IsEnum } from 'class-validator';
+import { IsString, IsOptional, IsInt, Min, Max, IsEnum, IsUUID } from 'class-validator';
 import { VehicleStatus } from '@prisma/client';
 
 export class UpdateVehicleDto {
@@ -31,4 +31,12 @@ export class UpdateVehicleDto {
   @IsEnum(VehicleStatus)
   @IsOptional()
   status?: VehicleStatus;
+
+  /**
+   * Inspector responsable. `null` quita el responsable; ausente, no lo cambia.
+   * (`@IsOptional` deja pasar `null` sin validar el UUID.)
+   */
+  @IsUUID('all', { message: 'El responsable indicado no es válido.' })
+  @IsOptional()
+  responsibleId?: string | null;
 }

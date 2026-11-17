@@ -40,6 +40,43 @@ describe('Mensajes para n8n', () => {
     expect(alerta.codigos).toEqual(['P0300', 'P0301']);
   });
 
+  it('la alerta nombra al responsable del vehículo, o dice que no tiene', () => {
+    const conResponsable = construirAlerta({
+      ...ORDEN,
+      vehicle: { ...ORDEN.vehicle, responsible: { name: 'Carlos' } },
+    });
+    expect(conResponsable.mensaje).toContain('Responsable: Carlos');
+    expect(conResponsable.vehiculo.responsable).toBe('Carlos');
+
+    const sin = construirAlerta(ORDEN);
+    expect(sin.mensaje).toContain('Responsable: sin responsable');
+    expect(sin.vehiculo.responsable).toBeNull();
+  });
+
+  it('el resumen nombra al responsable de órdenes y vehículos atrasados', () => {
+    const resumen = construirResumen(
+      [{ ...ORDEN, vehicle: { ...ORDEN.vehicle, responsible: { name: 'Carlos' } } }],
+      [
+        {
+          plate: 'ATRASADO',
+          alias: null,
+          responsible: { name: 'Lucía' },
+          scans: [{ scannedAt: haceDias(41) }],
+        },
+        { plate: 'NUEVO', alias: null, responsible: null, scans: [] },
+      ],
+      AHORA,
+    );
+
+    expect(resumen.ordenes[0].responsable).toBe('Carlos');
+    expect(resumen.mensaje).toContain('(responsable: Carlos)');
+    expect(resumen.mensaje).toContain(
+      'ATRASADO: 41 días sin escaneo (responsable: Lucía)',
+    );
+    expect(resumen.mensaje).toContain('NUEVO: nunca fue escaneado (responsable: sin responsable)');
+    expect(resumen.vehiculosSinEscaneo.map((v) => v.responsable)).toEqual([null, 'Lucía']);
+  });
+
   it('omite el enlace si no se configuró la dirección de la web', () => {
     expect(construirAlerta(ORDEN).mensaje).not.toContain('Ver la orden');
   });

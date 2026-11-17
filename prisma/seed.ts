@@ -67,6 +67,7 @@ async function main() {
       model: 'Tacoma',
       year: 2021,
       status: VehicleStatus.CRITICAL,
+      responsibleId: inspector.id,
     },
   });
 
@@ -81,6 +82,7 @@ async function main() {
       model: 'Hilux',
       year: 2019,
       status: VehicleStatus.ALERT,
+      responsibleId: inspector.id,
     },
   });
 
@@ -95,6 +97,7 @@ async function main() {
       model: 'Hiace',
       year: 2020,
       status: VehicleStatus.ALERT,
+      responsibleId: inspector.id,
     },
   });
 

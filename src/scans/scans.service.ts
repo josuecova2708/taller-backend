@@ -6,7 +6,16 @@ import {
   UnauthorizedException,
 } from '@nestjs/common';
 import { normalizarVin, vinEnConflicto } from './vin-check';
-import { VehicleStatus } from '@prisma/client';
+import {
+  ScanSeverity,
+  VehicleStatus,
+  WorkOrderStatus,
+} from '@prisma/client';
+import {
+  dictamenSecuelaDeReparacion,
+  inicioVentanaReparacion,
+  pareceSecuelaDeReparacion,
+} from './post-reparacion';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateScanDto } from './dto/create-scan.dto';
 import { DeterministicFilterService } from '../obd/deterministic-filter.service';
@@ -149,12 +158,18 @@ export class ScansService {
     );
 
     // 4. Ejecutar Filtro Determinístico (Capa 1)
-    const evaluation = this.filterService.evaluateScan({
+    let evaluation = this.filterService.evaluateScan({
       dtcs: dto.dtcs || [],
       readinessStatus: dto.readinessStatus,
       previousDtcCodes,
       batteryVoltage: dto.batteryVoltage,
     });
+
+    // 4.1 Falsa alarma tras reparar: un código PERMANENTE con monitores
+    //     incompletos, poco después de cerrar una orden como completada, es lo
+    //     esperable mientras la ECU completa sus ciclos. No abre orden ni pide
+    //     hipótesis. Cualquier CONFIRMED o PENDING sigue las reglas de siempre.
+    evaluation = await this.considerarReparacionReciente(vehicle.id, dto, evaluation);
 
     // 5. Persistir Scan + DtcEntries y actualizar estado del vehículo
     const createdScan = await this.prisma.scan.create({
@@ -247,6 +262,54 @@ export class ScansService {
         status: evaluation.requiresAiEvaluation ? 'generando' : 'no requerida',
       },
       workOrderId,
+    };
+  }
+
+  /**
+   * Si el escaneo parece la secuela de una reparación reciente, devuelve la
+   * evaluación ajustada: ALERT, sin IA y con un dictamen que lo explica.
+   *
+   * La severidad queda en LOW (el filtro le daría MEDIUM): con MEDIUM y sin
+   * hipótesis, la web lo mostraría como una hipótesis fallida por reintentar.
+   */
+  private async considerarReparacionReciente<
+    T extends {
+      severity: ScanSeverity;
+      vehicleStatus: VehicleStatus;
+      requiresAiEvaluation: boolean;
+      rationale: string;
+    },
+  >(vehicleId: string, dto: CreateScanDto, evaluation: T): Promise<T> {
+    const dtcs = dto.dtcs || [];
+    if (
+      !pareceSecuelaDeReparacion(dtcs, dto.readinessStatus?.monitorsCompleted)
+    ) {
+      return evaluation;
+    }
+
+    const reparacion = await this.prisma.workOrder.findFirst({
+      where: {
+        vehicleId,
+        status: WorkOrderStatus.COMPLETED,
+        closedAt: { gte: inicioVentanaReparacion() },
+      },
+      orderBy: { closedAt: 'desc' },
+      select: { closedAt: true },
+    });
+    if (!reparacion?.closedAt) {
+      return evaluation;
+    }
+
+    return {
+      ...evaluation,
+      severity: ScanSeverity.LOW,
+      vehicleStatus: VehicleStatus.ALERT,
+      requiresAiEvaluation: false,
+      rationale: dictamenSecuelaDeReparacion(
+        Array.from(new Set(dtcs.map((d) => d.code.trim().toUpperCase()))),
+        reparacion.closedAt,
+        dto.readinessStatus?.incompleteMonitors ?? [],
+      ),
     };
   }
 

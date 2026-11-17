@@ -48,6 +48,7 @@ function construir(ordenesAbiertas = 0) {
       })),
     },
     workOrder: { count: jest.fn().mockResolvedValue(ordenesAbiertas) },
+    vehicle: { updateMany: jest.fn().mockResolvedValue({ count: 0 }) },
   };
   const jwt = { sign: jest.fn().mockReturnValue('token') };
   return { servicio: new AuthService(prisma as any, jwt as any), prisma };
@@ -62,6 +63,39 @@ describe('AuthService: gestión de usuarios (CU02)', () => {
     expect(prisma.user.update).toHaveBeenCalledWith(
       expect.objectContaining({ where: { id: MECANICO.id }, data: { active: false } }),
     );
+  });
+
+  it('al desactivar una cuenta, sus vehículos quedan sin responsable', async () => {
+    const { servicio, prisma } = construir();
+    await servicio.setUserActive(MECANICO.id, false, ADMIN.id);
+
+    expect(prisma.vehicle.updateMany).toHaveBeenCalledWith({
+      where: { responsibleId: MECANICO.id },
+      data: { responsibleId: null },
+    });
+  });
+
+  it('al reactivar una cuenta no toca los vehículos', async () => {
+    const { servicio, prisma } = construir();
+    await servicio.setUserActive(MECANICO.id, true, ADMIN.id);
+
+    expect(prisma.vehicle.updateMany).not.toHaveBeenCalled();
+  });
+
+  it('si un inspector deja de serlo, sus vehículos quedan sin responsable', async () => {
+    const { servicio, prisma } = construir();
+    prisma.user.findUnique.mockResolvedValueOnce({
+      ...MECANICO,
+      id: 'ins-1',
+      role: UserRole.INSPECTOR as any,
+    });
+
+    await servicio.updateUser('ins-1', { role: UserRole.MECHANIC }, ADMIN.id);
+
+    expect(prisma.vehicle.updateMany).toHaveBeenCalledWith({
+      where: { responsibleId: 'ins-1' },
+      data: { responsibleId: null },
+    });
   });
 
   it('no deja que alguien desactive su propia cuenta', async () => {

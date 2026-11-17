@@ -16,8 +16,12 @@ const ESTADOS_ABIERTOS: WorkOrderStatus[] = [
  * Existe por la contracara de una regla del sistema: mientras un vehículo tiene
  * una orden abierta, un escaneo limpio NO lo devuelve a OK (si no, bastaría con
  * borrar los códigos o desconectar la batería para ponerlo en verde). Esa regla
- * necesita su complemento: al cerrarse la última orden abierta, el estado debe
- * volver a derivarse de los datos, o el vehículo quedaría en rojo para siempre.
+ * necesita su complemento cuando una orden se CANCELA: el estado vuelve a
+ * derivarse de los datos, o el vehículo quedaría en rojo para siempre.
+ *
+ * Cuando la orden se cierra como COMPLETADA no se usa este recálculo: el
+ * mecánico que la cierra asume que el vehículo quedó reparado y vuelve a OK
+ * (ver `WorkOrdersService.close`). Queda registrado quién la cerró.
  *
  * Vive en `ObdModule` y no en `ScansModule` porque lo consumen tanto los
  * escaneos como las órdenes de trabajo, y tenerlo en uno de los dos creaba una
@@ -38,10 +42,9 @@ export class VehicleStatusService {
    * No hace nada si todavía quedan órdenes abiertas: en ese caso la condición
    * sigue sin resolverse y el estado debe mantenerse.
    *
-   * Nótese que un vehículo cuyo último escaneo fue CRÍTICO permanece en
-   * CRÍTICO aunque se cierre la orden: la reparación se registró, pero hace
-   * falta un escaneo posterior que lo confirme. Es la disciplina que persigue
-   * un sistema preventivo, no un efecto secundario.
+   * Se usa al cancelar una orden: cancelar no es reparar, así que un vehículo
+   * cuyo último escaneo fue CRÍTICO sigue en CRÍTICO hasta que un escaneo
+   * posterior muestre otra cosa.
    */
   async recomputeForVehicle(vehicleId: string): Promise<VehicleStatus | null> {
     const abiertas = await this.prisma.workOrder.count({

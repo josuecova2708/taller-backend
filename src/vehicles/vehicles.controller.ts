@@ -3,16 +3,28 @@ import { VehiclesService } from './vehicles.service';
 import { CreateVehicleDto } from './dto/create-vehicle.dto';
 import { UpdateVehicleDto } from './dto/update-vehicle.dto';
 import { RequirePermission } from '../auth/decorators/require-permission.decorator';
+import { GetUser } from '../auth/decorators/get-user.decorator';
 import { Permission } from '../auth/permissions';
 
 @Controller('vehicles')
 export class VehiclesController {
   constructor(private readonly vehiclesService: VehiclesService) {}
 
+  /**
+   * Flota. Con `?mine=true`, solo los vehículos de los que el usuario del
+   * token es responsable (la pantalla «Mis vehículos» del inspector).
+   */
   @RequirePermission(Permission.VEHICLE_READ)
   @Get()
-  findAll(@Query('includeInactive') includeInactive?: string) {
-    return this.vehiclesService.findAll(includeInactive === 'true');
+  findAll(
+    @GetUser('sub') userId: string,
+    @Query('includeInactive') includeInactive?: string,
+    @Query('mine') mine?: string,
+  ) {
+    return this.vehiclesService.findAll(
+      includeInactive === 'true',
+      mine === 'true' ? userId : undefined,
+    );
   }
 
   @RequirePermission(Permission.VEHICLE_READ)
