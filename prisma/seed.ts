@@ -60,7 +60,7 @@ async function main() {
     where: { plate: '5521-TAC' },
     update: { status: VehicleStatus.CRITICAL },
     create: {
-      vin: '5TFCZ5AN3MX255216',
+      vin: 'TESTTAC0000000001',
       plate: '5521-TAC',
       alias: 'Camioneta Facultad Ciencias Agrícolas',
       make: 'Toyota',
@@ -125,7 +125,7 @@ async function main() {
         rawHex: '41 01 82 07 65 00',
       },
       rawPayload: {
-        vin: '5TFCZ5AN3MX255216',
+        vin: 'TESTTAC0000000001',
         batteryVoltage: 13.3,
         readiness: '41 01 82 07 65 00',
         dtcs: [
