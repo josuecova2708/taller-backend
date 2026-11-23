@@ -4,6 +4,7 @@ import {
   BadRequestException,
   ConflictException,
   UnauthorizedException,
+  Optional,
 } from '@nestjs/common';
 import { normalizarVin, vinEnConflicto } from './vin-check';
 import {
@@ -17,6 +18,7 @@ import {
   pareceSecuelaDeReparacion,
 } from './post-reparacion';
 import { PrismaService } from '../prisma/prisma.service';
+import { AuditService } from '../audit/audit.service';
 import { CreateScanDto } from './dto/create-scan.dto';
 import { DeterministicFilterService } from '../obd/deterministic-filter.service';
 import { DiagnosisService, VENTANA_HISTORIAL } from '../diagnosis/diagnosis.service';
@@ -34,10 +36,23 @@ export class ScansService {
     private readonly workOrdersService: WorkOrdersService,
     private readonly n8nService: N8nService,
     private readonly pushService: PushService,
+    @Optional() private readonly auditService?: AuditService,
   ) {}
 
-  async findAll() {
+  async findAll(inspectorId?: string) {
+    let where: Record<string, any> = {};
+    if (inspectorId) {
+      const inspector = await this.prisma.user?.findUnique({
+        where: { id: inspectorId },
+        select: { unitId: true },
+      });
+      where = inspector?.unitId
+        ? { vehicle: { unitId: inspector.unitId } }
+        : { vehicle: { responsibleId: inspectorId } };
+    }
+
     const scans = await this.prisma.scan.findMany({
+      where,
       orderBy: { scannedAt: 'desc' },
       include: {
         vehicle: true,
@@ -172,6 +187,21 @@ export class ScansService {
     evaluation = await this.considerarReparacionReciente(vehicle.id, dto, evaluation);
 
     // 5. Persistir Scan + DtcEntries y actualizar estado del vehículo
+    const codigosEntrada = (dto.dtcs || []).map((d) => d.code.trim().toUpperCase());
+    const codigosEnCatalogo = new Set<string>();
+    const p = this.prisma as any;
+    if (codigosEntrada.length > 0 && p.dtcCatalog?.findMany) {
+      try {
+        const encontrados = await p.dtcCatalog.findMany({
+          where: { code: { in: codigosEntrada } },
+          select: { code: true },
+        });
+        for (const c of encontrados) codigosEnCatalogo.add(c.code);
+      } catch {
+        // Silencioso en mocks de prueba
+      }
+    }
+
     const createdScan = await this.prisma.scan.create({
       data: {
         vehicleId: vehicle.id,
@@ -188,10 +218,16 @@ export class ScansService {
         severity: evaluation.severity,
         aiProcessed: false,
         dtcEntries: {
-          create: (dto.dtcs || []).map((dtc) => ({
-            code: dtc.code.trim().toUpperCase(),
-            type: dtc.type,
-          })),
+          create: (dto.dtcs || []).map((dtc) => {
+            const normalized = dtc.code.trim().toUpperCase();
+            return {
+              code: normalized,
+              type: dtc.type,
+              ...(codigosEnCatalogo.has(normalized)
+                ? { catalogCode: normalized }
+                : {}),
+            };
+          }),
         },
       },
       include: {
@@ -201,6 +237,14 @@ export class ScansService {
           select: { id: true, name: true, email: true },
         },
       },
+    });
+
+    void this.auditService?.record({
+      userId: scannedById,
+      action: 'SCAN',
+      entity: 'SCAN',
+      entityId: createdScan.id,
+      summary: `Escaneo OBD-II registrado para ${vehicle.plate} — Severidad: ${evaluation.severity} (${createdScan.dtcEntries.length} códigos)`,
     });
 
     // 6. Crear o actualizar la orden de evaluación ANTES de llamar a la IA.

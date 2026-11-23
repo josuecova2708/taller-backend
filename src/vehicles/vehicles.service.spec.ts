@@ -2,6 +2,7 @@
 // corre en CommonJS.
 jest.mock('@nestjs/common', () => ({
   Injectable: () => () => {},
+  Optional: () => () => {},
   NotFoundException: class NotFoundException extends Error {},
   ConflictException: class ConflictException extends Error {},
   BadRequestException: class BadRequestException extends Error {},

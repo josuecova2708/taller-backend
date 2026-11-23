@@ -170,6 +170,12 @@ export class PushService {
           `Push de la orden ${workOrderId} entregado a ` +
             `${resultado.dispositivos} dispositivo(s)`,
         );
+        await this.registrarNotificacionPush(
+          workOrderId,
+          orden.vehicle.responsibleId ?? null,
+          `Push FCM de nueva orden (${orden.vehicle.plate}) a ${resultado.dispositivos} dispositivo(s)`,
+          'SENT',
+        );
       }
 
       const responsableId = orden.vehicle.responsibleId;
@@ -355,5 +361,30 @@ export class PushService {
       );
     }
     return { enviado: true, dispositivos: entregados };
+  }
+
+  private async registrarNotificacionPush(
+    workOrderId: string,
+    recipientId: string | null,
+    subject: string,
+    status: 'SENT' | 'FAILED',
+    errorDetail?: string,
+  ): Promise<void> {
+    const p = this.prisma as any;
+    if (!p.notificationLog?.create) return;
+    try {
+      await p.notificationLog.create({
+        data: {
+          workOrderId,
+          recipientId,
+          channel: 'PUSH',
+          status,
+          subject,
+          errorDetail: errorDetail || null,
+        },
+      });
+    } catch {
+      // Silencioso en mocks
+    }
   }
 }

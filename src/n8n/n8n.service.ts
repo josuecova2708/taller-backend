@@ -79,6 +79,12 @@ export class N8nService {
         this.logger.warn(
           `n8n respondió ${respuesta.status} al aviso de la orden ${workOrderId}`,
         );
+        await this.registrarNotificacion(
+          workOrderId,
+          `Alerta de orden para ${orden.vehicle.plate}`,
+          'FAILED',
+          `HTTP ${respuesta.status}`,
+        );
         return {
           enviado: false,
           motivo: `El servicio de avisos respondió con un error (${respuesta.status}).`,
@@ -89,6 +95,11 @@ export class N8nService {
         where: { id: workOrderId },
         data: { n8nNotified: true },
       });
+      await this.registrarNotificacion(
+        workOrderId,
+        `Alerta de orden para ${orden.vehicle.plate} (Telegram + Email vía n8n)`,
+        'SENT',
+      );
       this.logger.log(`Aviso de la orden ${workOrderId} entregado a n8n`);
       return { enviado: true };
     } catch (error) {
@@ -96,7 +107,36 @@ export class N8nService {
         `No se pudo avisar a n8n de la orden ${workOrderId}: ` +
           (error instanceof Error ? error.message : String(error)),
       );
+      await this.registrarNotificacion(
+        workOrderId,
+        `Alerta de orden ${workOrderId.slice(0, 8)}`,
+        'FAILED',
+        error instanceof Error ? error.message : String(error),
+      );
       return { enviado: false, motivo: 'No se pudo conectar con el servicio de avisos.' };
+    }
+  }
+
+  private async registrarNotificacion(
+    workOrderId: string,
+    subject: string,
+    status: 'SENT' | 'FAILED',
+    errorDetail?: string,
+  ): Promise<void> {
+    const p = this.prisma as any;
+    if (!p.notificationLog?.create) return;
+    try {
+      await p.notificationLog.create({
+        data: {
+          workOrderId,
+          channel: 'TELEGRAM',
+          status,
+          subject,
+          errorDetail: errorDetail || null,
+        },
+      });
+    } catch {
+      // Silencioso en mocks
     }
   }
 

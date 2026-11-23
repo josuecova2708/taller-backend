@@ -107,6 +107,7 @@ export class DiagnosisService {
       });
 
       await this.vincularAOrden(scanId, diagnosis.id, hypothesis.summary);
+      await this.sembrarTareasSugeridas(scanId, hypothesis.verificationSteps);
 
       this.logger.log(
         `Hipótesis guardada para el escaneo ${scanId} ` +
@@ -275,5 +276,38 @@ export class DiagnosisService {
     this.logger.log(
       `El escaneo ${scanId} no tiene orden propia; la hipótesis queda asociada solo al escaneo.`,
     );
+  }
+
+  /**
+   * Si la orden aún no tiene tareas en `work_order_tasks`, siembra los pasos de
+   * verificación sugeridos por la hipótesis de IA como checklist inicial.
+   */
+  private async sembrarTareasSugeridas(
+    scanId: string,
+    verificationSteps: string[],
+  ): Promise<void> {
+    if (!Array.isArray(verificationSteps) || verificationSteps.length === 0) return;
+    const p = this.prisma as any;
+    if (!p.workOrderTask?.count || !p.workOrderTask?.createMany) return;
+
+    try {
+      const orden = await this.prisma.workOrder.findUnique({ where: { scanId } });
+      if (!orden) return;
+
+      const existentes = await p.workOrderTask.count({
+        where: { workOrderId: orden.id },
+      });
+      if (existentes > 0) return;
+
+      await p.workOrderTask.createMany({
+        data: verificationSteps.map((step) => ({
+          workOrderId: orden.id,
+          description: step.trim(),
+          completed: false,
+        })),
+      });
+    } catch {
+      // Silencioso si no está disponible en mocks
+    }
   }
 }

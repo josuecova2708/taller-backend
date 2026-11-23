@@ -15,6 +15,11 @@ import { PushService } from '../push/push.service';
 import { AdvanceWorkOrderDto } from './dto/advance-work-order.dto';
 import { CloseWorkOrderDto } from './dto/close-work-order.dto';
 import { AssignWorkOrderDto } from './dto/assign-work-order.dto';
+import {
+  AddWorkOrderPartDto,
+  CreateWorkOrderTaskDto,
+  ToggleWorkOrderTaskDto,
+} from './dto/work-order-resources.dto';
 import { RequirePermission } from '../auth/decorators/require-permission.decorator';
 import { GetUser } from '../auth/decorators/get-user.decorator';
 import { Permission } from '../auth/permissions';
@@ -29,8 +34,10 @@ export class WorkOrdersController {
 
   @RequirePermission(Permission.ORDER_READ)
   @Get()
-  findAll() {
-    return this.workOrdersService.findAll();
+  findAll(@GetUser('sub') userId: string, @GetUser('role') userRole: string) {
+    return this.workOrdersService.findAll(
+      userRole === 'INSPECTOR' ? userId : undefined,
+    );
   }
 
   @RequirePermission(Permission.ORDER_READ)
@@ -127,5 +134,45 @@ export class WorkOrdersController {
   @Patch(':id/assign')
   assign(@Param('id') id: string, @Body() dto: AssignWorkOrderDto) {
     return this.workOrdersService.assign(id, dto.assignedToId ?? null);
+  }
+
+  /** Agrega una tarea o ítem de verificación técnica a la orden. */
+  @RequirePermission(Permission.ORDER_UPDATE_STATUS)
+  @Post(':id/tasks')
+  addTask(
+    @Param('id') id: string,
+    @Body() dto: CreateWorkOrderTaskDto,
+    @GetUser() actor: Actor,
+  ) {
+    return this.workOrdersService.addTask(id, dto.description, actor);
+  }
+
+  /** Marca una tarea de verificación como completada o pendiente. */
+  @RequirePermission(Permission.ORDER_UPDATE_STATUS)
+  @Patch(':id/tasks/:taskId')
+  toggleTask(
+    @Param('id') id: string,
+    @Param('taskId') taskId: string,
+    @Body() dto: ToggleWorkOrderTaskDto,
+    @GetUser() actor: Actor,
+  ) {
+    return this.workOrdersService.toggleTask(id, taskId, dto.completed, actor);
+  }
+
+  /** Registra un repuesto o insumo utilizado en la orden y descuenta stock. */
+  @RequirePermission(Permission.ORDER_UPDATE_STATUS)
+  @Post(':id/parts')
+  addPart(
+    @Param('id') id: string,
+    @Body() dto: AddWorkOrderPartDto,
+    @GetUser() actor: Actor,
+  ) {
+    return this.workOrdersService.addPart(
+      id,
+      dto.sparePartId,
+      dto.quantity,
+      dto.notes,
+      actor,
+    );
   }
 }

@@ -10,6 +10,8 @@ import { WorkOrdersModule } from './work-orders/work-orders.module';
 import { AiModule } from './ai/ai.module';
 import { N8nModule } from './n8n/n8n.module';
 import { PushModule } from './push/push.module';
+import { AuditModule } from './audit/audit.module';
+import { CatalogModule } from './catalog/catalog.module';
 import { JwtAuthGuard } from './auth/guards/jwt-auth.guard';
 import { PermissionsGuard } from './auth/guards/permissions.guard';
 import { validateEnv } from './config/env.validation';
@@ -18,6 +20,8 @@ import { validateEnv } from './config/env.validation';
   imports: [
     ConfigModule.forRoot({ isGlobal: true, validate: validateEnv }),
     PrismaModule,
+    AuditModule,
+    CatalogModule,
     AuthModule,
     VehiclesModule,
     ScansModule,

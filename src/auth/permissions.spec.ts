@@ -37,9 +37,10 @@ describe('Matriz de permisos por rol', () => {
     expect(asignan).toEqual([UserRole.ADMIN]);
   });
 
-  it('el INSPECTOR lee la hipótesis de IA pero no ve órdenes', () => {
+  it('el INSPECTOR lee la hipótesis de IA y puede consultar y crear órdenes, pero no cerrarlas', () => {
     expect(roleHasPermission(UserRole.INSPECTOR, Permission.DIAGNOSIS_READ)).toBe(true);
-    expect(roleHasPermission(UserRole.INSPECTOR, Permission.ORDER_READ)).toBe(false);
+    expect(roleHasPermission(UserRole.INSPECTOR, Permission.ORDER_READ)).toBe(true);
+    expect(roleHasPermission(UserRole.INSPECTOR, Permission.ORDER_CREATE)).toBe(true);
     expect(roleHasPermission(UserRole.INSPECTOR, Permission.ORDER_CLOSE)).toBe(false);
   });
 

@@ -3,12 +3,14 @@ import {
   ConflictException,
   Injectable,
   NotFoundException,
+  Optional,
   UnauthorizedException,
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { UserRole, WorkOrderStatus } from '@prisma/client';
 import * as bcrypt from 'bcrypt';
 import { PrismaService } from '../prisma/prisma.service';
+import { AuditService } from '../audit/audit.service';
 import { RegisterDto } from './dto/register.dto';
 import { LoginDto } from './dto/login.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
@@ -23,6 +25,16 @@ const CAMPOS_PUBLICOS = {
   name: true,
   role: true,
   active: true,
+  unitId: true,
+  unit: { select: { id: true, name: true, code: true, type: true } },
+  mechanicProfile: {
+    include: {
+      specialties: {
+        include: { specialty: { select: { id: true, code: true, name: true } } },
+      },
+    },
+  },
+  inspectorProfile: true,
   createdAt: true,
 } as const;
 
@@ -31,9 +43,17 @@ export class AuthService {
   constructor(
     private prisma: PrismaService,
     private jwtService: JwtService,
+    @Optional() private readonly auditService?: AuditService,
   ) {}
 
-  private buildSession(user: { id: string; email: string; name: string; role: UserRole }) {
+  private buildSession(user: {
+    id: string;
+    email: string;
+    name: string;
+    role: UserRole;
+    unitId?: string | null;
+    unit?: { id: string; name: string; code: string; type: string } | null;
+  }) {
     const token = this.jwtService.sign({
       sub: user.id,
       email: user.email,
@@ -48,6 +68,8 @@ export class AuthService {
         name: user.name,
         role: user.role,
         roleLabel: ROLE_LABELS[user.role],
+        unitId: user.unitId ?? null,
+        unit: user.unit ?? null,
         permissions: permissionsForRole(user.role),
       },
     };
@@ -62,14 +84,33 @@ export class AuthService {
     }
 
     const passwordHash = await bcrypt.hash(dto.password, BCRYPT_ROUNDS);
+    const role = dto.role ?? UserRole.INSPECTOR;
+
+    // Los mecánicos pertenecen al taller general y no a una organización/facultad específica.
+    const unitId =
+      role === UserRole.MECHANIC ? null : dto.unitId ? dto.unitId : null;
 
     const user = await this.prisma.user.create({
       data: {
         email,
         name: dto.name.trim(),
         passwordHash,
-        role: dto.role ?? UserRole.INSPECTOR,
+        role,
+        unitId,
       },
+      include: {
+        unit: { select: { id: true, name: true, code: true, type: true } },
+      },
+    });
+
+    await this.sincronizarPerfilSubtipo(user.id, role, dto);
+
+    void this.auditService?.record({
+      userId: user.id,
+      action: 'CREATE',
+      entity: 'USER',
+      entityId: user.id,
+      summary: `Usuario creado: ${user.name} (${user.email}) con rol ${ROLE_LABELS[user.role]}`,
     });
 
     return this.buildSession(user);
@@ -98,11 +139,24 @@ export class AuthService {
       );
     }
 
+    void this.auditService?.record({
+      userId: user.id,
+      action: 'LOGIN',
+      entity: 'USER',
+      entityId: user.id,
+      summary: `Inicio de sesión de ${user.name} (${ROLE_LABELS[user.role]})`,
+    });
+
     return this.buildSession(user);
   }
 
   async getProfile(userId: string) {
-    const user = await this.prisma.user.findUnique({ where: { id: userId } });
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      include: {
+        unit: { select: { id: true, name: true, code: true, type: true } },
+      },
+    });
 
     if (!user || !user.active) {
       throw new UnauthorizedException('Usuario no encontrado o desactivado');
@@ -114,6 +168,8 @@ export class AuthService {
       name: user.name,
       role: user.role,
       roleLabel: ROLE_LABELS[user.role],
+      unitId: user.unitId ?? null,
+      unit: user.unit ?? null,
       permissions: permissionsForRole(user.role),
     };
   }
@@ -121,7 +177,7 @@ export class AuthService {
   async listUsers() {
     const users = await this.prisma.user.findMany({
       orderBy: { createdAt: 'asc' },
-      select: { id: true, email: true, name: true, role: true, active: true, createdAt: true },
+      select: CAMPOS_PUBLICOS,
     });
 
     return users.map((user) => ({
@@ -131,14 +187,14 @@ export class AuthService {
   }
 
   /**
-   * Edita nombre, correo o rol de una cuenta.
+   * Edita nombre, correo, unidad organizacional, rol o perfil especializado de una cuenta.
    *
    * Nadie cambia su propio rol: así el sistema no puede quedarse sin
    * administrador por un descuido (siempre queda al menos quien edita).
    */
   async updateUser(id: string, dto: UpdateUserDto, actorId: string) {
     const usuario = await this.buscarUsuario(id);
-    const data: { email?: string; name?: string; role?: UserRole } = {};
+    const data: { email?: string; name?: string; role?: UserRole; unitId?: string | null } = {};
 
     if (dto.email !== undefined) {
       const email = dto.email.trim().toLowerCase();
@@ -152,6 +208,7 @@ export class AuthService {
     }
 
     if (dto.name !== undefined) data.name = dto.name.trim();
+    if (dto.unitId !== undefined) data.unitId = dto.unitId || null;
 
     if (dto.role !== undefined && dto.role !== usuario.role) {
       if (id === actorId) {
@@ -166,6 +223,12 @@ export class AuthService {
       }
       data.role = dto.role;
     }
+
+    const rolFinal = data.role ?? usuario.role;
+    if (rolFinal === UserRole.MECHANIC) {
+      data.unitId = null;
+    }
+    await this.sincronizarPerfilSubtipo(id, rolFinal, dto);
 
     const actualizado = await this.prisma.user.update({
       where: { id },
@@ -182,6 +245,14 @@ export class AuthService {
     ) {
       await this.liberarVehiculos(id);
     }
+
+    void this.auditService?.record({
+      userId: actorId,
+      action: 'UPDATE',
+      entity: 'USER',
+      entityId: actualizado.id,
+      summary: `Usuario actualizado: ${actualizado.name} (${ROLE_LABELS[actualizado.role]})`,
+    });
 
     return { ...actualizado, roleLabel: ROLE_LABELS[actualizado.role] };
   }
@@ -253,6 +324,85 @@ export class AuthService {
         `Este mecánico tiene ${abiertas} ${abiertas === 1 ? 'orden de trabajo abierta' : 'órdenes de trabajo abiertas'}. ` +
           `Reasígnelas antes de ${accion}.`,
       );
+    }
+  }
+
+  /**
+   * Mantiene sincronizadas las tablas de generalización / especialización (1:1)
+   * `mechanic_profiles` e `inspector_profiles` cuando se crea o edita un usuario.
+   */
+  private async sincronizarPerfilSubtipo(
+    userId: string,
+    role: UserRole,
+    dto: Partial<RegisterDto & UpdateUserDto>,
+  ): Promise<void> {
+    const p = this.prisma as any;
+    const tieneCamposMecanico =
+      dto.employeeCode !== undefined ||
+      dto.workshopBay !== undefined ||
+      dto.experienceYears !== undefined ||
+      dto.shift !== undefined ||
+      dto.specialtyIds !== undefined;
+
+    const tieneCamposInspector =
+      dto.credentialNumber !== undefined ||
+      dto.assignedZone !== undefined ||
+      dto.licenseCategory !== undefined ||
+      dto.canAuthorizeRoute !== undefined;
+
+    if (role === UserRole.MECHANIC && p.mechanicProfile && tieneCamposMecanico) {
+      const code =
+        dto.employeeCode?.trim().toUpperCase() || `MEC-${userId.slice(0, 6).toUpperCase()}`;
+      await p.mechanicProfile.upsert({
+        where: { userId },
+        create: {
+          userId,
+          employeeCode: code,
+          workshopBay: dto.workshopBay?.trim() || 'Bahía 1',
+          experienceYears: dto.experienceYears ?? 1,
+          shift: dto.shift?.trim() || 'MAÑANA',
+        },
+        update: {
+          ...(dto.employeeCode ? { employeeCode: code } : {}),
+          ...(dto.workshopBay ? { workshopBay: dto.workshopBay.trim() } : {}),
+          ...(dto.experienceYears !== undefined
+            ? { experienceYears: dto.experienceYears }
+            : {}),
+          ...(dto.shift ? { shift: dto.shift.trim() } : {}),
+        },
+      });
+
+      if (Array.isArray(dto.specialtyIds) && p.mechanicSpecialty) {
+        await p.mechanicSpecialty.deleteMany({ where: { mechanicUserId: userId } });
+        for (const specialtyId of dto.specialtyIds) {
+          await p.mechanicSpecialty.create({
+            data: { mechanicUserId: userId, specialtyId },
+          });
+        }
+      }
+    }
+
+    if (role === UserRole.INSPECTOR && p.inspectorProfile && tieneCamposInspector) {
+      const cred =
+        dto.credentialNumber?.trim().toUpperCase() || `INSP-${userId.slice(0, 6).toUpperCase()}`;
+      await p.inspectorProfile.upsert({
+        where: { userId },
+        create: {
+          userId,
+          credentialNumber: cred,
+          assignedZone: dto.assignedZone?.trim() || 'Campus Universitario',
+          licenseCategory: dto.licenseCategory?.trim() || 'B',
+          canAuthorizeRoute: dto.canAuthorizeRoute ?? true,
+        },
+        update: {
+          ...(dto.credentialNumber ? { credentialNumber: cred } : {}),
+          ...(dto.assignedZone ? { assignedZone: dto.assignedZone.trim() } : {}),
+          ...(dto.licenseCategory ? { licenseCategory: dto.licenseCategory.trim() } : {}),
+          ...(dto.canAuthorizeRoute !== undefined
+            ? { canAuthorizeRoute: dto.canAuthorizeRoute }
+            : {}),
+        },
+      });
     }
   }
 }

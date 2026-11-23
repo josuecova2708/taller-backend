@@ -255,92 +255,56 @@ Las migraciones viven en `prisma/migrations/` y las aplica `applyMigrations()` (
 
 ---
 
-## Modelo de Base de Datos
+## Modelo de Base de Datos (23 Tablas — Normalización 3NF, Generalización y Trazabilidad)
 
 > [!NOTE]
-> **Corrección técnica aplicada**: `monitorStatus` (readiness de monitores OBD) es un dato **global por escaneo** obtenido del Mode 01 PID 01, NO un atributo per-DTC. Se almacena en `SCAN` como campo `readinessStatus` (JSON con el estado de cada monitor). El `DTC_ENTRY` solo tiene `code` y `type` (qué modo OBD lo reportó).
+> **Arquitectura Relacional para Taller de Grado**: El esquema relacional en PostgreSQL (Prisma) cuenta con **23 tablas** estructuradas en 5 subsistemas que incluyen patrones avanzados de diseño de bases de datos:
+> - **Generalización / Especialización (Herencia 1:1 Tabla por Subtipo)**: `users` es la supertabla y se especializa en `mechanic_profiles` e `inspector_profiles` compartiendo la misma PK/FK (`userId`).
+> - **Relación Jerárquica Recursiva (Self-Relation 1:N)**: `organizational_units` modela el organigrama universitario (`parentId` → `id`: Rectorado → Facultad / Dirección → Unidad Operativa).
+> - **Relaciones Muchos a Muchos (N:M) con atributos propios**: `mechanic_specialties` (certificación y nivel entre `mechanic_profiles` y `specialties`) y `work_order_parts` (cantidad, costo unitario e insumos usados entre `work_orders` y `spare_parts`).
+> - **Descomposición Jerárquica 3NF (Catálogos)**: Clasificación vehicular (`vehicle_categories`, `vehicle_brands`, `vehicle_models` → `vehicles`), catálogo técnico OBD-II (`obd_systems` → `dtc_catalog` → `dtc_entries`) e inventario de repuestos (`spare_part_categories` → `spare_parts`).
+> - **Entidades Débiles y Bitácoras de Auditoría**: `work_order_tasks` (checklist técnico), `work_order_status_history` (trazabilidad de estados), `audit_logs` (bitácora general) y `notification_logs` (despachos Push FCM, Telegram y Email).
 
 ```mermaid
 erDiagram
-    USER {
-        uuid id PK
-        string email UK
-        string passwordHash
-        string name
-        enum role "INSPECTOR | MECHANIC | ADMIN"
-        timestamp createdAt
-    }
+    ORGANIZATIONAL_UNIT ||--o{ ORGANIZATIONAL_UNIT : "jerarquia recursiva"
+    ORGANIZATIONAL_UNIT ||--o{ USER : "pertenece a"
+    ORGANIZATIONAL_UNIT ||--o{ VEHICLE : "asignado a"
 
-    VEHICLE {
-        uuid id PK
-        string vin UK "nullable si no se puede leer"
-        string plate UK
-        string alias "ej: Bus Línea 3"
-        string make
-        string model
-        int year
-        enum status "OK | ALERT | CRITICAL"
-        timestamp createdAt
-    }
-
-    SCAN {
-        uuid id PK
-        uuid vehicleId FK
-        uuid scannedById FK
-        float batteryVoltage
-        timestamp scannedAt
-        json rawPayload "JSON original completo"
-        json readinessStatus "Mode 01 PID 01: estado global de monitores"
-        text notes "Dictamen determinístico u observación del inspector"
-        enum severity "NONE | LOW | MEDIUM | HIGH | CRITICAL"
-        boolean aiProcessed "DEFAULT false"
-        timestamp createdAt
-    }
-
-    DTC_ENTRY {
-        uuid id PK
-        uuid scanId FK
-        string code "P0300, P2195, etc."
-        enum type "CONFIRMED | PENDING | PERMANENT"
-    }
-
-    DIAGNOSIS {
-        uuid id PK
-        uuid scanId FK "ONE-TO-ONE"
-        string provider "claude | ollama"
-        text prompt "prompt enviado a la IA"
-        text response "respuesta cruda de la IA"
-        text summary "hipótesis técnica resumida"
-        string severity "LOW | MEDIUM | HIGH | CRITICAL"
-        json recommendations "pasos sugeridos para evaluación"
-        int tokensUsed
-        int latencyMs
-        timestamp createdAt
-    }
-
-    WORK_ORDER {
-        uuid id PK
-        uuid scanId FK
-        uuid diagnosisId FK
-        uuid vehicleId FK
-        uuid assignedToId FK "nullable"
-        enum status "OPEN | IN_PROGRESS | COMPLETED | CANCELLED"
-        enum priority "LOW | MEDIUM | HIGH | CRITICAL"
-        text description
-        text notes "nullable, notas del mecánico"
-        boolean n8nNotified "DEFAULT false"
-        timestamp createdAt
-        timestamp updatedAt
-    }
-
+    USER ||--o| MECHANIC_PROFILE : "generalizacion 1:1"
+    USER ||--o| INSPECTOR_PROFILE : "generalizacion 1:1"
+    USER ||--o{ DEVICE : "registra"
     USER ||--o{ SCAN : "realiza"
+    USER ||--o{ WORK_ORDER : "atendida por"
+    USER ||--o{ AUDIT_LOG : "ejecuta"
+    USER ||--o{ NOTIFICATION_LOG : "recibe"
+
+    MECHANIC_PROFILE ||--o{ MECHANIC_SPECIALTY : "posee"
+    SPECIALTY ||--o{ MECHANIC_SPECIALTY : "certifica"
+
+    VEHICLE_CATEGORY ||--o{ VEHICLE_MODEL : "clasifica"
+    VEHICLE_CATEGORY ||--o{ VEHICLE : "agrupa"
+    VEHICLE_BRAND ||--o{ VEHICLE_MODEL : "fabrica"
+    VEHICLE_MODEL ||--o{ VEHICLE : "tipifica"
+
     VEHICLE ||--o{ SCAN : "tiene"
+    VEHICLE ||--o{ WORK_ORDER : "tiene"
+
+    OBD_SYSTEM ||--o{ DTC_CATALOG : "clasifica"
+    DTC_CATALOG ||--o{ DTC_ENTRY : "documenta"
+
     SCAN ||--o{ DTC_ENTRY : "contiene"
     SCAN ||--o| DIAGNOSIS : "genera"
     SCAN ||--o| WORK_ORDER : "origina"
     DIAGNOSIS ||--o| WORK_ORDER : "justifica"
-    VEHICLE ||--o{ WORK_ORDER : "tiene"
-    USER ||--o{ WORK_ORDER : "asignado a"
+
+    WORK_ORDER ||--o{ WORK_ORDER_TASK : "desglosa"
+    WORK_ORDER ||--o{ WORK_ORDER_PART : "consume"
+    WORK_ORDER ||--o{ WORK_ORDER_STATUS_HISTORY : "registra transicion"
+    WORK_ORDER ||--o{ NOTIFICATION_LOG : "notifica"
+
+    SPARE_PART_CATEGORY ||--o{ SPARE_PART : "clasifica"
+    SPARE_PART ||--o{ WORK_ORDER_PART : "utilizado en"
 ```
 
 ---

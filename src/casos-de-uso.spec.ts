@@ -7,6 +7,7 @@
 // Mock de @nestjs/common para compatibilidad ts-jest en arquitectura ESM
 jest.mock('@nestjs/common', () => ({
   Injectable: () => () => {},
+  Optional: () => () => {},
   Logger: class {
     log() {}
     warn() {}
@@ -17,6 +18,9 @@ jest.mock('@nestjs/common', () => ({
   ForbiddenException: class ForbiddenException extends Error {},
   BadRequestException: class BadRequestException extends Error {},
 }));
+jest.mock('./prisma/prisma.service', () => ({ PrismaService: class {} }));
+jest.mock('./obd/vehicle-status.service', () => ({ VehicleStatusService: class {} }));
+jest.mock('./audit/audit.service', () => ({ AuditService: class {} }));
 
 import {
   UserRole,
@@ -57,9 +61,9 @@ describe('2.5.4 Pruebas Unitarias de Casos de Uso (Backend)', () => {
       expect(roleHasPermission(UserRole.MECHANIC, Permission.VEHICLE_WRITE)).toBe(false);
     });
 
-    it('debe permitir al INSPECTOR registrar escaneos pero impedir el acceso a órdenes', () => {
+    it('debe permitir al INSPECTOR registrar escaneos y consultar órdenes pero impedir que las cierre', () => {
       expect(roleHasPermission(UserRole.INSPECTOR, Permission.SCAN_CREATE)).toBe(true);
-      expect(roleHasPermission(UserRole.INSPECTOR, Permission.ORDER_READ)).toBe(false);
+      expect(roleHasPermission(UserRole.INSPECTOR, Permission.ORDER_READ)).toBe(true);
       expect(roleHasPermission(UserRole.INSPECTOR, Permission.ORDER_CLOSE)).toBe(false);
     });
   });
@@ -169,11 +173,11 @@ describe('2.5.4 Pruebas Unitarias de Casos de Uso (Backend)', () => {
           { cause: 'Bobina de encendido del cilindro 1 en corto intermitente', confidence: 'ALTA' },
           { cause: 'Bujía con carbonización excesiva', confidence: 'MEDIA' },
         ],
-        suggestedVerifications: [
+        verificationSteps: [
           'Medir resistencia de bobina de ignición en cilindro 1.',
           'Extraer e inspeccionar estado del electrodo de la bujía 1.',
         ],
-        affectedComponents: ['Bobina de encendido cilindro 1', 'Bujía cilindro 1'],
+        correlations: 'P0300 y P0301 comparten causa raíz en cilindro 1.',
       };
 
       const parsed = DiagnosisHypothesisSchema.safeParse(mockAiResponse);

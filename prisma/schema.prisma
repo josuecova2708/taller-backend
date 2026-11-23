@@ -47,6 +47,42 @@ enum WorkOrderPriority {
   CRITICAL
 }
 
+enum NotificationChannel {
+  PUSH
+  TELEGRAM
+  EMAIL
+}
+
+enum NotificationStatus {
+  SENT
+  FAILED
+  PENDING
+}
+
+// ============================================================================
+// SUBSISTEMA 1: ESTRUCTURA ORGANIZACIONAL Y PERFILES (GENERALIZACIÓN / HERENCIA)
+// ============================================================================
+
+/// Unidad organizacional recursiva (Rectorado -> Facultad -> Unidad Operativa).
+/// Relación recursiva (self-relation) 1:N.
+model OrganizationalUnit {
+  id        String   @id @default(uuid())
+  name      String
+  code      String   @unique
+  type      String   @default("FACULTAD") // RECTORADO, FACULTAD, DIRECCION, TALLER
+  parentId  String?
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+
+  parent   OrganizationalUnit?  @relation("UnitHierarchy", fields: [parentId], references: [id], onDelete: SetNull)
+  children OrganizationalUnit[] @relation("UnitHierarchy")
+  users    User[]
+  vehicles Vehicle[]
+
+  @@index([parentId])
+  @@map("organizational_units")
+}
+
 model User {
   id           String    @id @default(uuid())
   email        String    @unique
@@ -54,16 +90,83 @@ model User {
   name         String
   role         UserRole  @default(INSPECTOR)
   active       Boolean   @default(true)
+  unitId       String?
   createdAt    DateTime  @default(now())
 
-  scans        Scan[]
-  workOrders   WorkOrder[] @relation("AssignedTo")
-  closedOrders WorkOrder[] @relation("ClosedBy")
-  devices      Device[]
-  /// Vehículos de los que esta cuenta (un inspector) es responsable.
-  responsibleFor Vehicle[] @relation("ResponsibleFor")
+  unit             OrganizationalUnit? @relation(fields: [unitId], references: [id], onDelete: SetNull)
+  /// Generalización / Especialización (Herencia Tabla por Subtipo 1:1)
+  mechanicProfile  MechanicProfile?
+  inspectorProfile InspectorProfile?
 
+  scans            Scan[]
+  workOrders       WorkOrder[]         @relation("AssignedTo")
+  closedOrders     WorkOrder[]         @relation("ClosedBy")
+  statusChanges    WorkOrderStatusHistory[]
+  devices          Device[]
+  /// Vehículos de los que esta cuenta (un inspector) es responsable.
+  responsibleFor   Vehicle[]           @relation("ResponsibleFor")
+  auditLogs        AuditLog[]
+  notificationLogs NotificationLog[]
+
+  @@index([unitId])
   @@map("users")
+}
+
+/// Especialización de User (Herencia 1:1) para el rol MECHANIC.
+model MechanicProfile {
+  userId          String   @id
+  employeeCode    String   @unique
+  workshopBay     String   @default("Bahía 1")
+  experienceYears Int      @default(1)
+  shift           String   @default("MAÑANA")
+  active          Boolean  @default(true)
+  createdAt       DateTime @default(now())
+
+  user        User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  specialties MechanicSpecialty[]
+
+  @@map("mechanic_profiles")
+}
+
+/// Especialización de User (Herencia 1:1) para el rol INSPECTOR.
+model InspectorProfile {
+  userId            String   @id
+  credentialNumber  String   @unique
+  assignedZone      String   @default("Campus Universitario")
+  licenseCategory   String   @default("B")
+  canAuthorizeRoute Boolean  @default(true)
+  createdAt         DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("inspector_profiles")
+}
+
+/// Catálogo de especialidades técnicas automotrices.
+model Specialty {
+  id          String   @id @default(uuid())
+  code        String   @unique
+  name        String   @unique
+  description String?
+  createdAt   DateTime @default(now())
+
+  mechanics MechanicSpecialty[]
+
+  @@map("specialties")
+}
+
+/// Relación N:M explícita entre MechanicProfile y Specialty con clave primaria compuesta.
+model MechanicSpecialty {
+  mechanicUserId String
+  specialtyId    String
+  certifiedAt    DateTime @default(now())
+  level          String   @default("SENIOR") // JUNIOR, SEMI_SENIOR, SENIOR
+
+  mechanic  MechanicProfile @relation(fields: [mechanicUserId], references: [userId], onDelete: Cascade)
+  specialty Specialty       @relation(fields: [specialtyId], references: [id], onDelete: Cascade)
+
+  @@id([mechanicUserId, specialtyId])
+  @@map("mechanic_specialties")
 }
 
 /// Teléfono registrado para recibir notificaciones push (CU18).
@@ -83,26 +186,120 @@ model Device {
   @@map("devices")
 }
 
+// ============================================================================
+// SUBSISTEMA 2: CLASIFICACIÓN JERÁRQUICA DE FLOTA VEHICULAR (3NF)
+// ============================================================================
+
+/// Categoría de vehículo (Camioneta, Minibús, Utilitario, Sedán).
+model VehicleCategory {
+  id                String   @id @default(uuid())
+  name              String   @unique
+  description       String?
+  inspectionCycleDays Int    @default(30)
+  createdAt         DateTime @default(now())
+
+  models   VehicleModel[]
+  vehicles Vehicle[]
+
+  @@map("vehicle_categories")
+}
+
+/// Marca o fabricante del vehículo (Toyota, Nissan, Mitsubishi, etc.).
+model VehicleBrand {
+  id            String   @id @default(uuid())
+  name          String   @unique
+  countryOrigin String?  @default("Japón")
+  createdAt     DateTime @default(now())
+
+  models VehicleModel[]
+
+  @@map("vehicle_brands")
+}
+
+/// Modelo normalizado asociado a una Marca y una Categoría.
+model VehicleModel {
+  id           String   @id @default(uuid())
+  brandId      String
+  categoryId   String?
+  name         String
+  engineType   String   @default("GASOLINA") // GASOLINA, DIESEL
+  displacement String?  @default("2.7L")
+  createdAt    DateTime @default(now())
+
+  brand    VehicleBrand     @relation(fields: [brandId], references: [id], onDelete: Cascade)
+  category VehicleCategory? @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  vehicles Vehicle[]
+
+  @@unique([brandId, name])
+  @@index([brandId])
+  @@index([categoryId])
+  @@map("vehicle_models")
+}
+
 model Vehicle {
-  id        String        @id @default(uuid())
-  vin       String?       @unique
-  plate     String        @unique
-  alias     String?
-  make      String?
-  model     String?
-  year      Int?
-  status    VehicleStatus @default(OK)
-  active    Boolean       @default(true)
-  createdAt DateTime      @default(now())
+  id            String        @id @default(uuid())
+  vin           String?       @unique
+  plate         String        @unique
+  alias         String?
+  make          String?
+  model         String?
+  year          Int?
+  status        VehicleStatus @default(OK)
+  active        Boolean       @default(true)
+  createdAt     DateTime      @default(now())
   /// Inspector responsable del vehículo: recibe los avisos de sus órdenes.
   responsibleId String?
+  /// Normalización y gestión organizacional
+  modelId       String?
+  categoryId    String?
+  unitId        String?
 
-  responsible User?       @relation("ResponsibleFor", fields: [responsibleId], references: [id], onDelete: SetNull)
-  scans       Scan[]
-  workOrders  WorkOrder[]
+  responsible  User?               @relation("ResponsibleFor", fields: [responsibleId], references: [id], onDelete: SetNull)
+  vehicleModel VehicleModel?       @relation(fields: [modelId], references: [id], onDelete: SetNull)
+  category     VehicleCategory?    @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  unit         OrganizationalUnit? @relation(fields: [unitId], references: [id], onDelete: SetNull)
+  scans        Scan[]
+  workOrders   WorkOrder[]
 
   @@index([responsibleId])
+  @@index([modelId])
+  @@index([categoryId])
+  @@index([unitId])
   @@map("vehicles")
+}
+
+// ============================================================================
+// SUBSISTEMA 3: DIAGNÓSTICO OBD-II Y CATÁLOGO TÉCNICO DE FALLAS
+// ============================================================================
+
+/// Sistema automotriz ISO 15031 / SAE J2012 (Powertrain, Chassis, Body, Network).
+model ObdSystem {
+  id          String   @id @default(uuid())
+  prefix      String   @unique // P, C, B, U
+  name        String   @unique
+  description String?
+  createdAt   DateTime @default(now())
+
+  dtcCatalog DtcCatalog[]
+
+  @@map("obd_systems")
+}
+
+/// Catálogo maestro de códigos de falla DTC en base de datos.
+model DtcCatalog {
+  code              String       @id
+  systemId          String
+  description       String
+  defaultSeverity   ScanSeverity @default(MEDIUM)
+  commonCauses      String?
+  isEmissionsRelated Boolean     @default(true)
+  createdAt         DateTime     @default(now())
+
+  system     ObdSystem  @relation(fields: [systemId], references: [id], onDelete: Cascade)
+  dtcEntries DtcEntry[]
+
+  @@index([systemId])
+  @@map("dtc_catalog")
 }
 
 model Scan {
@@ -130,13 +327,16 @@ model Scan {
 }
 
 model DtcEntry {
-  id     String  @id @default(uuid())
-  scanId String
-  code   String
-  type   DtcType
+  id          String  @id @default(uuid())
+  scanId      String
+  code        String
+  type        DtcType
+  catalogCode String?
 
-  scan Scan @relation(fields: [scanId], references: [id], onDelete: Cascade)
+  scan    Scan        @relation(fields: [scanId], references: [id], onDelete: Cascade)
+  catalog DtcCatalog? @relation(fields: [catalogCode], references: [code], onDelete: SetNull)
 
+  @@index([catalogCode])
   @@map("dtc_entries")
 }
 
@@ -159,28 +359,162 @@ model Diagnosis {
   @@map("diagnoses")
 }
 
-model WorkOrder {
-  id           String            @id @default(uuid())
-  scanId       String            @unique
-  diagnosisId  String?           @unique
-  vehicleId    String
-  assignedToId String?
-  status       WorkOrderStatus   @default(OPEN)
-  priority     WorkOrderPriority @default(MEDIUM)
-  description  String
-  notes        String?
-  n8nNotified  Boolean           @default(false)
-  closedById   String?
-  closedAt     DateTime?
-  operationAuthorized Boolean    @default(false)
-  createdAt    DateTime          @default(now())
-  updatedAt    DateTime          @updatedAt
+// ============================================================================
+// SUBSISTEMA 4: GESTIÓN DE TALLER, REPUESTOS Y TRAZABILIDAD DE ÓRDENES
+// ============================================================================
 
-  scan       Scan       @relation(fields: [scanId], references: [id], onDelete: Cascade)
-  diagnosis  Diagnosis? @relation(fields: [diagnosisId], references: [id], onDelete: SetNull)
-  vehicle    Vehicle    @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
-  assignedTo User?      @relation("AssignedTo", fields: [assignedToId], references: [id])
-  closedBy   User?      @relation("ClosedBy", fields: [closedById], references: [id])
+model WorkOrder {
+  id                  String            @id @default(uuid())
+  scanId              String            @unique
+  diagnosisId         String?           @unique
+  vehicleId           String
+  assignedToId        String?
+  status              WorkOrderStatus   @default(OPEN)
+  priority            WorkOrderPriority @default(MEDIUM)
+  description         String
+  notes               String?
+  n8nNotified         Boolean           @default(false)
+  closedById          String?
+  closedAt            DateTime?
+  operationAuthorized Boolean           @default(false)
+  createdAt           DateTime          @default(now())
+  updatedAt           DateTime          @updatedAt
+
+  scan             Scan                     @relation(fields: [scanId], references: [id], onDelete: Cascade)
+  diagnosis        Diagnosis?               @relation(fields: [diagnosisId], references: [id], onDelete: SetNull)
+  vehicle          Vehicle                  @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
+  assignedTo       User?                    @relation("AssignedTo", fields: [assignedToId], references: [id])
+  closedBy         User?                    @relation("ClosedBy", fields: [closedById], references: [id])
+  tasks            WorkOrderTask[]
+  partsUsed        WorkOrderPart[]
+  statusHistory    WorkOrderStatusHistory[]
+  notificationLogs NotificationLog[]
 
   @@map("work_orders")
+}
+
+/// Entidad débil: Ítems o tareas de verificación técnica de una orden de trabajo.
+model WorkOrderTask {
+  id          String    @id @default(uuid())
+  workOrderId String
+  description String
+  completed   Boolean   @default(false)
+  completedAt DateTime?
+  createdAt   DateTime  @default(now())
+
+  workOrder WorkOrder @relation(fields: [workOrderId], references: [id], onDelete: Cascade)
+
+  @@index([workOrderId])
+  @@map("work_order_tasks")
+}
+
+/// Categoría de repuestos e insumos de taller (Encendido, Filtros, Sensores, Lubricantes).
+model SparePartCategory {
+  id          String   @id @default(uuid())
+  name        String   @unique
+  description String?
+  createdAt   DateTime @default(now())
+
+  parts SparePart[]
+
+  @@map("spare_part_categories")
+}
+
+/// Catálogo e inventario de repuestos e insumos de taller.
+model SparePart {
+  id         String   @id @default(uuid())
+  categoryId String
+  sku        String   @unique
+  name       String
+  brand      String?
+  unitCost   Float    @default(0)
+  stock      Int      @default(0)
+  minStock   Int      @default(2)
+  active     Boolean  @default(true)
+  createdAt  DateTime @default(now())
+
+  category   SparePartCategory @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+  ordersUsed WorkOrderPart[]
+
+  @@index([categoryId])
+  @@map("spare_parts")
+}
+
+/// Tabla asociativa N:M con atributos propios (cantidad, costo unitario) entre WorkOrder y SparePart.
+model WorkOrderPart {
+  id          String   @id @default(uuid())
+  workOrderId String
+  sparePartId String
+  quantity    Int      @default(1)
+  unitCost    Float    @default(0)
+  notes       String?
+  createdAt   DateTime @default(now())
+
+  workOrder WorkOrder @relation(fields: [workOrderId], references: [id], onDelete: Cascade)
+  sparePart SparePart @relation(fields: [sparePartId], references: [id], onDelete: Restrict)
+
+  @@unique([workOrderId, sparePartId])
+  @@index([workOrderId])
+  @@index([sparePartId])
+  @@map("work_order_parts")
+}
+
+/// Historial de transiciones de estado de una orden de trabajo (Trazabilidad completa).
+model WorkOrderStatusHistory {
+  id          String           @id @default(uuid())
+  workOrderId String
+  fromStatus  WorkOrderStatus?
+  toStatus    WorkOrderStatus
+  changedById String?
+  reason      String?
+  changedAt   DateTime         @default(now())
+
+  workOrder WorkOrder @relation(fields: [workOrderId], references: [id], onDelete: Cascade)
+  changedBy User?     @relation(fields: [changedById], references: [id], onDelete: SetNull)
+
+  @@index([workOrderId])
+  @@index([changedById])
+  @@map("work_order_status_history")
+}
+
+// ============================================================================
+// SUBSISTEMA 5: AUDITORÍA, BITÁCORA Y TRAZABILIDAD DE NOTIFICACIONES
+// ============================================================================
+
+/// Bitácora general del sistema (Auditoría de operaciones críticas).
+model AuditLog {
+  id        String   @id @default(uuid())
+  userId    String?
+  action    String   // LOGIN, CREATE, UPDATE, DELETE, CLOSE_ORDER, ASSIGN_ORDER, SCAN
+  entity    String   // USER, VEHICLE, SCAN, WORK_ORDER, SPARE_PART, CATALOG
+  entityId  String?
+  summary   String
+  metadata  Json?
+  createdAt DateTime @default(now())
+
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([userId])
+  @@index([entity, entityId])
+  @@index([createdAt])
+  @@map("audit_logs")
+}
+
+/// Bitácora de despachos de notificaciones multi-canal (Push FCM, Telegram, Email vía n8n).
+model NotificationLog {
+  id          String              @id @default(uuid())
+  workOrderId String?
+  recipientId String?
+  channel     NotificationChannel
+  status      NotificationStatus  @default(SENT)
+  subject     String
+  errorDetail String?
+  sentAt      DateTime            @default(now())
+
+  workOrder WorkOrder? @relation(fields: [workOrderId], references: [id], onDelete: Cascade)
+  recipient User?      @relation(fields: [recipientId], references: [id], onDelete: SetNull)
+
+  @@index([workOrderId])
+  @@index([recipientId])
+  @@map("notification_logs")
 }

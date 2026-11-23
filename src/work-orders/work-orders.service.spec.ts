@@ -3,6 +3,7 @@
 // ya usaba deterministic-filter.service.spec.ts.
 jest.mock('@nestjs/common', () => ({
   Injectable: () => () => {},
+  Optional: () => () => {},
   Logger: class {
     log() {}
     warn() {}

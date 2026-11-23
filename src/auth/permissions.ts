@@ -32,6 +32,13 @@ export const Permission = {
 
   // Reportes PDF
   REPORT_EXPORT: 'report:export',
+
+  // Inventario de repuestos y catálogos de taller
+  INVENTORY_READ: 'inventory:read',
+  INVENTORY_WRITE: 'inventory:write',
+
+  // Bitácora de auditoría y notificaciones
+  AUDIT_READ: 'audit:read',
 } as const;
 
 export type PermissionValue = (typeof Permission)[keyof typeof Permission];
@@ -70,6 +77,9 @@ export const ROLE_PERMISSIONS: Record<UserRole, readonly PermissionValue[]> = {
     Permission.ORDER_UPDATE_STATUS,
     Permission.ORDER_CLOSE,
     Permission.REPORT_EXPORT,
+    Permission.INVENTORY_READ,
+    Permission.INVENTORY_WRITE,
+    Permission.AUDIT_READ,
   ],
   [UserRole.MECHANIC]: [
     Permission.VEHICLE_READ,
@@ -80,12 +90,15 @@ export const ROLE_PERMISSIONS: Record<UserRole, readonly PermissionValue[]> = {
     Permission.ORDER_UPDATE_STATUS,
     Permission.ORDER_CLOSE,
     Permission.REPORT_EXPORT,
+    Permission.INVENTORY_READ,
   ],
   [UserRole.INSPECTOR]: [
     Permission.VEHICLE_READ,
     Permission.SCAN_READ,
     Permission.SCAN_CREATE,
     Permission.DIAGNOSIS_READ,
+    Permission.ORDER_READ,
+    Permission.ORDER_CREATE,
   ],
 };
 
