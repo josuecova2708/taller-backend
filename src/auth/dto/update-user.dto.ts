@@ -1,10 +1,14 @@
 import {
+  IsArray,
   IsBoolean,
   IsEmail,
   IsEnum,
+  IsInt,
   IsOptional,
   IsString,
+  IsUUID,
   MaxLength,
+  Min,
   MinLength,
 } from 'class-validator';
 import { UserRole } from '@prisma/client';
@@ -24,6 +28,49 @@ export class UpdateUserDto {
   @IsOptional()
   @IsEnum(UserRole)
   role?: UserRole;
+
+  @IsOptional()
+  @IsUUID('all')
+  unitId?: string | null;
+
+  // Campos de especialización (Generalización / Herencia 1:1)
+  @IsOptional()
+  @IsString()
+  employeeCode?: string;
+
+  @IsOptional()
+  @IsString()
+  workshopBay?: string;
+
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  experienceYears?: number;
+
+  @IsOptional()
+  @IsString()
+  shift?: string;
+
+  @IsOptional()
+  @IsArray()
+  @IsUUID('all', { each: true })
+  specialtyIds?: string[];
+
+  @IsOptional()
+  @IsString()
+  credentialNumber?: string;
+
+  @IsOptional()
+  @IsString()
+  assignedZone?: string;
+
+  @IsOptional()
+  @IsString()
+  licenseCategory?: string;
+
+  @IsOptional()
+  @IsBoolean()
+  canAuthorizeRoute?: boolean;
 }
 
 export class ResetPasswordDto {

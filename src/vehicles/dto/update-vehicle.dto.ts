@@ -39,4 +39,16 @@ export class UpdateVehicleDto {
   @IsUUID('all', { message: 'El responsable indicado no es válido.' })
   @IsOptional()
   responsibleId?: string | null;
+
+  @IsUUID('all', { message: 'El modelo seleccionado no es válido.' })
+  @IsOptional()
+  modelId?: string | null;
+
+  @IsUUID('all', { message: 'La categoría seleccionada no es válida.' })
+  @IsOptional()
+  categoryId?: string | null;
+
+  @IsUUID('all', { message: 'La unidad organizacional seleccionada no es válida.' })
+  @IsOptional()
+  unitId?: string | null;
 }

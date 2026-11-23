@@ -3,9 +3,11 @@ import {
   NotFoundException,
   ConflictException,
   BadRequestException,
+  Optional,
 } from '@nestjs/common';
 import { UserRole, WorkOrderStatus } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import { AuditService } from '../audit/audit.service';
 import { CreateVehicleDto } from './dto/create-vehicle.dto';
 import { UpdateVehicleDto } from './dto/update-vehicle.dto';
 
@@ -14,9 +16,28 @@ export const RESPONSABLE_PUBLICO = {
   select: { id: true, name: true, email: true },
 } as const;
 
+export const RELACIONES_VEHICULO = {
+  responsible: RESPONSABLE_PUBLICO,
+  category: { select: { id: true, name: true, inspectionCycleDays: true } },
+  unit: { select: { id: true, name: true, code: true, type: true } },
+  vehicleModel: {
+    select: {
+      id: true,
+      name: true,
+      engineType: true,
+      displacement: true,
+      brand: { select: { id: true, name: true, countryOrigin: true } },
+      category: { select: { id: true, name: true } },
+    },
+  },
+} as const;
+
 @Injectable()
 export class VehiclesService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    @Optional() private readonly auditService?: AuditService,
+  ) {}
 
   /**
    * Vehículos de la flota. Los dados de baja se excluyen salvo que se pidan:
@@ -26,15 +47,29 @@ export class VehiclesService {
    * Con `responsableId`, solo los vehículos de los que esa cuenta es
    * responsable (`GET /vehicles?mine=true`).
    */
-  async findAll(includeInactive = false, responsableId?: string) {
+  async findAll(includeInactive = false, responsableId?: string, inspectorId?: string) {
+    let filtroInspector: Record<string, any> = {};
+    if (inspectorId && !responsableId) {
+      const inspector = await this.prisma.user?.findUnique({
+        where: { id: inspectorId },
+        select: { unitId: true },
+      });
+      if (inspector?.unitId) {
+        filtroInspector = { unitId: inspector.unitId };
+      } else {
+        filtroInspector = { responsibleId: inspectorId };
+      }
+    }
+
     return this.prisma.vehicle.findMany({
       where: {
         ...(includeInactive ? {} : { active: true }),
         ...(responsableId ? { responsibleId: responsableId } : {}),
+        ...filtroInspector,
       },
       orderBy: { createdAt: 'desc' },
       include: {
-        responsible: RESPONSABLE_PUBLICO,
+        ...RELACIONES_VEHICULO,
         scans: {
           orderBy: { scannedAt: 'desc' },
           take: 1,
@@ -57,7 +92,7 @@ export class VehiclesService {
     const vehicle = await this.prisma.vehicle.findUnique({
       where: { id },
       include: {
-        responsible: RESPONSABLE_PUBLICO,
+        ...RELACIONES_VEHICULO,
         scans: {
           orderBy: { scannedAt: 'desc' },
           include: {
@@ -130,24 +165,58 @@ export class VehiclesService {
       }
     }
 
-    const responsibleId = dto.responsibleId ?? null;
-    if (responsibleId) {
+    let responsibleId = dto.responsibleId ?? null;
+    if (!responsibleId && dto.unitId && (this.prisma as any).user?.findFirst) {
+      const inspUnidad = await (this.prisma as any).user.findFirst({
+        where: { unitId: dto.unitId, role: UserRole.INSPECTOR, active: true },
+        select: { id: true },
+      });
+      if (inspUnidad) responsibleId = inspUnidad.id;
+    } else if (responsibleId) {
       await this.validarResponsable(responsibleId);
     }
 
-    return this.prisma.vehicle.create({
+    let make = dto.make?.trim() || null;
+    let model = dto.model?.trim() || null;
+    let categoryId = dto.categoryId ?? null;
+
+    if (dto.modelId && (this.prisma as any).vehicleModel) {
+      const m = await (this.prisma as any).vehicleModel.findUnique({
+        where: { id: dto.modelId },
+        include: { brand: true },
+      });
+      if (m) {
+        make = make || m.brand?.name || null;
+        model = model || m.name || null;
+        categoryId = categoryId || m.categoryId || null;
+      }
+    }
+
+    const created = await this.prisma.vehicle.create({
       data: {
         plate,
         vin,
         alias: dto.alias?.trim() || null,
-        make: dto.make?.trim() || null,
-        model: dto.model?.trim() || null,
+        make,
+        model,
         year: dto.year ?? null,
         status: dto.status,
         responsibleId,
+        ...(dto.modelId !== undefined ? { modelId: dto.modelId || null } : {}),
+        ...(categoryId !== null || dto.categoryId !== undefined ? { categoryId } : {}),
+        ...(dto.unitId !== undefined ? { unitId: dto.unitId || null } : {}),
       },
-      include: { responsible: RESPONSABLE_PUBLICO },
+      include: RELACIONES_VEHICULO,
     });
+
+    void this.auditService?.record({
+      action: 'CREATE',
+      entity: 'VEHICLE',
+      entityId: created.id,
+      summary: `Vehículo registrado: ${created.plate} (${[created.make, created.model].filter(Boolean).join(' ') || 'Sin marca'})`,
+    });
+
+    return created;
   }
 
   async update(id: string, dto: UpdateVehicleDto) {
@@ -164,6 +233,41 @@ export class VehiclesService {
       data.responsibleId = dto.responsibleId || null;
       if (data.responsibleId) {
         await this.validarResponsable(data.responsibleId);
+      }
+    }
+
+    if (dto.modelId !== undefined) {
+      data.modelId = dto.modelId || null;
+      if (data.modelId && (this.prisma as any).vehicleModel) {
+        const m = await (this.prisma as any).vehicleModel.findUnique({
+          where: { id: data.modelId },
+          include: { brand: true },
+        });
+        if (m) {
+          if (!data.make) data.make = m.brand?.name || undefined;
+          if (!data.model) data.model = m.name || undefined;
+          if (dto.categoryId === undefined && m.categoryId) {
+            data.categoryId = m.categoryId;
+          }
+        }
+      }
+    }
+
+    if (dto.categoryId !== undefined) {
+      data.categoryId = dto.categoryId || null;
+    }
+    if (dto.unitId !== undefined) {
+      data.unitId = dto.unitId || null;
+      if (dto.responsibleId === undefined && (this.prisma as any).user?.findFirst) {
+        if (data.unitId) {
+          const inspUnidad = await (this.prisma as any).user.findFirst({
+            where: { unitId: data.unitId, role: UserRole.INSPECTOR, active: true },
+            select: { id: true },
+          });
+          data.responsibleId = inspUnidad?.id ?? null;
+        } else {
+          data.responsibleId = null;
+        }
       }
     }
 
@@ -186,11 +290,20 @@ export class VehiclesService {
       }
     }
 
-    return this.prisma.vehicle.update({
+    const updated = await this.prisma.vehicle.update({
       where: { id },
       data,
-      include: { responsible: RESPONSABLE_PUBLICO },
+      include: RELACIONES_VEHICULO,
     });
+
+    void this.auditService?.record({
+      action: 'UPDATE',
+      entity: 'VEHICLE',
+      entityId: updated.id,
+      summary: `Vehículo editado: ${updated.plate}`,
+    });
+
+    return updated;
   }
 
   /**

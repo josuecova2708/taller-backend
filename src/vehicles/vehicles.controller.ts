@@ -18,12 +18,14 @@ export class VehiclesController {
   @Get()
   findAll(
     @GetUser('sub') userId: string,
+    @GetUser('role') userRole: string,
     @Query('includeInactive') includeInactive?: string,
     @Query('mine') mine?: string,
   ) {
     return this.vehiclesService.findAll(
       includeInactive === 'true',
       mine === 'true' ? userId : undefined,
+      userRole === 'INSPECTOR' ? userId : undefined,
     );
   }
 

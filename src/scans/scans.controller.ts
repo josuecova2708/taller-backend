@@ -15,8 +15,10 @@ export class ScansController {
 
   @RequirePermission(Permission.SCAN_READ)
   @Get()
-  findAll() {
-    return this.scansService.findAll();
+  findAll(@GetUser('sub') userId: string, @GetUser('role') userRole: string) {
+    return this.scansService.findAll(
+      userRole === 'INSPECTOR' ? userId : undefined,
+    );
   }
 
   /** Escaneos que requerían hipótesis y todavía no la tienen. */

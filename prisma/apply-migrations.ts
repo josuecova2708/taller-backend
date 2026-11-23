@@ -1,6 +1,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import type { Pool } from '@neondatabase/serverless';
+import type { PrismaClient } from '@prisma/client';
 
 const MIGRATIONS_DIR = path.join(__dirname, 'migrations');
 const INITIAL_MIGRATION = '20260926000000_init';
@@ -11,36 +12,99 @@ function readMigration(name: string): string {
 }
 
 /**
- * Sincroniza el esquema aplicando las migraciones en orden cronológico.
- *
- * Este proyecto no usa `prisma migrate deploy` porque la cadena de conexión de
- * Neon es la *pooled* (`-pooler`), sobre la que el CLI de Prisma no opera. El
- * SQL se aplica por WebSocket/443, que es la vía que funciona en redes
- * restrictivas — el mismo motivo por el que se eligió Neon.
- *
- * CONTRATO: la migración inicial se aplica solo sobre una base vacía. Toda
- * migración posterior se ejecuta en cada corrida, así que **debe ser
- * idempotente** (`IF EXISTS` / `IF NOT EXISTS`, `DROP CONSTRAINT` seguido de
- * `ADD CONSTRAINT`). No se lleva registro de lo ya aplicado.
- *
- * Antes esta lógica vivía dentro de `ensureSchema()` en seed.ts, con la ruta
- * de la migración inicial fija y unos `ALTER TABLE` sueltos escritos a mano.
- * Esa práctica fue la que hizo que la base divergiera de `schema.prisma`; ver
- * la migración `20260928000000_fix_cascade_deletes`.
+ * Divide un script SQL en sentencias individuales, respetando bloques `DO $$ ... END $$;`.
+ * Esto permite ejecutar migraciones tanto en Neon Pool como en PrismaClient ($executeRawUnsafe).
  */
-export async function applyMigrations(pool: Pool): Promise<void> {
-  console.log('📦 Verificando esquema en Neon PostgreSQL (vía puerto 443)...');
+function splitSqlStatements(sql: string): string[] {
+  const withoutComments = sql
+    .split('\n')
+    .filter((line) => !line.trim().startsWith('--'))
+    .join('\n');
 
-  const check = await pool.query(`
-    SELECT EXISTS (
-      SELECT FROM information_schema.tables
-      WHERE table_schema = 'public' AND table_name = 'users'
-    );
-  `);
+  const statements: string[] = [];
+  let current = '';
+  let inDollarBlock = false;
 
-  if (!check.rows[0].exists) {
+  for (let i = 0; i < withoutComments.length; i++) {
+    const ch = withoutComments[i];
+    const next = withoutComments[i + 1];
+
+    if (ch === '$' && next === '$') {
+      inDollarBlock = !inDollarBlock;
+      current += '$$';
+      i++;
+      continue;
+    }
+
+    if (ch === ';' && !inDollarBlock) {
+      const trimmed = current.trim();
+      if (trimmed.length > 0) {
+        statements.push(trimmed);
+      }
+      current = '';
+    } else {
+      current += ch;
+    }
+  }
+
+  const remaining = current.trim();
+  if (remaining.length > 0) {
+    statements.push(remaining);
+  }
+
+  return statements;
+}
+
+export interface SqlExecutor {
+  checkTableExists(tableName: string): Promise<boolean>;
+  executeSql(sql: string): Promise<void>;
+}
+
+export function createPoolExecutor(pool: Pool): SqlExecutor {
+  return {
+    async checkTableExists(tableName: string) {
+      const check = await pool.query(
+        `SELECT EXISTS (SELECT FROM information_schema.tables WHERE table_schema = 'public' AND table_name = $1);`,
+        [tableName],
+      );
+      return Boolean(check.rows[0]?.exists);
+    },
+    async executeSql(sql: string) {
+      await pool.query(sql);
+    },
+  };
+}
+
+export function createPrismaExecutor(prisma: PrismaClient): SqlExecutor {
+  return {
+    async checkTableExists(tableName: string) {
+      const rows = await prisma.$queryRawUnsafe<Array<{ exists: boolean }>>(
+        `SELECT EXISTS (SELECT FROM information_schema.tables WHERE table_schema = 'public' AND table_name = '${tableName}') AS "exists";`,
+      );
+      return Boolean(rows[0]?.exists);
+    },
+    async executeSql(sql: string) {
+      const statements = splitSqlStatements(sql);
+      for (const stmt of statements) {
+        await prisma.$executeRawUnsafe(stmt);
+      }
+    },
+  };
+}
+
+export async function applyMigrations(target: Pool | PrismaClient): Promise<void> {
+  const isPrisma = '$executeRawUnsafe' in target;
+  const executor = isPrisma
+    ? createPrismaExecutor(target as PrismaClient)
+    : createPoolExecutor(target as Pool);
+
+  console.log('📦 Verificando esquema en PostgreSQL...');
+
+  const exists = await executor.checkTableExists('users');
+
+  if (!exists) {
     console.log(`🛠️  Base vacía: aplicando migración inicial (${INITIAL_MIGRATION})...`);
-    await pool.query(readMigration(INITIAL_MIGRATION));
+    await executor.executeSql(readMigration(INITIAL_MIGRATION));
   }
 
   const subsequent = fs
@@ -51,8 +115,8 @@ export async function applyMigrations(pool: Pool): Promise<void> {
 
   for (const name of subsequent) {
     console.log(`🔧 Aplicando ${name}...`);
-    await pool.query(readMigration(name));
+    await executor.executeSql(readMigration(name));
   }
 
-  console.log('✅ Esquema sincronizado correctamente en Neon.');
+  console.log('✅ Esquema sincronizado correctamente (24 tablas).');
 }

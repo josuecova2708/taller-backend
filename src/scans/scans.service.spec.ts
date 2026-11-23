@@ -3,6 +3,7 @@
 // cargar Neon, Firebase ni el SDK de IA; las pruebas inyectan mocks.
 jest.mock('@nestjs/common', () => ({
   Injectable: () => () => {},
+  Optional: () => () => {},
   NotFoundException: class NotFoundException extends Error {},
   BadRequestException: class BadRequestException extends Error {},
   ConflictException: class ConflictException extends Error {},
