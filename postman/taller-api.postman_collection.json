@@ -1,0 +1,879 @@
+{
+  "info": {
+    "name": "Taller OBD-II — Pruebas de API (caja negra)",
+    "description": "Pruebas de caja negra de la API REST del backend. Cada solicitud lleva sus asserts (pestaña Tests). Se ejecuta en Postman (Run collection) o por consola con Newman: npm run test:api. Las carpetas 1 y 2 solo leen datos o reciben rechazos; las carpetas 3 y 4 crean escaneos y órdenes, por eso se corren contra la base local o la de CI, nunca contra producción.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "adminToken",
+      "value": ""
+    },
+    {
+      "key": "inspectorToken",
+      "value": ""
+    },
+    {
+      "key": "mechanicToken",
+      "value": ""
+    },
+    {
+      "key": "adminId",
+      "value": ""
+    },
+    {
+      "key": "inspectorId",
+      "value": ""
+    },
+    {
+      "key": "mechanicId",
+      "value": ""
+    },
+    {
+      "key": "vehicleId",
+      "value": ""
+    },
+    {
+      "key": "orderId",
+      "value": ""
+    }
+  ],
+  "item": [
+    {
+      "name": "1. Autenticación (CU01)",
+      "item": [
+        {
+          "name": "Login administrador",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 y devuelve un token JWT', () => {",
+                  "  pm.response.to.have.status(200);",
+                  "  const b = pm.response.json();",
+                  "  pm.expect(b.accessToken).to.be.a('string').and.not.empty;",
+                  "  pm.collectionVariables.set('adminToken', b.accessToken);",
+                  "  pm.collectionVariables.set('adminId', b.user.id);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{adminEmail}}\",\n  \"password\": \"{{password}}\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/auth/login",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "auth",
+                "login"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Login inspector",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 y devuelve un token JWT', () => {",
+                  "  pm.response.to.have.status(200);",
+                  "  const b = pm.response.json();",
+                  "  pm.expect(b.accessToken).to.be.a('string').and.not.empty;",
+                  "  pm.collectionVariables.set('inspectorToken', b.accessToken);",
+                  "  pm.collectionVariables.set('inspectorId', b.user.id);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{inspectorEmail}}\",\n  \"password\": \"{{password}}\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/auth/login",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "auth",
+                "login"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Login mecánico",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 y devuelve un token JWT', () => {",
+                  "  pm.response.to.have.status(200);",
+                  "  const b = pm.response.json();",
+                  "  pm.expect(b.accessToken).to.be.a('string').and.not.empty;",
+                  "  pm.collectionVariables.set('mechanicToken', b.accessToken);",
+                  "  pm.collectionVariables.set('mechanicId', b.user.id);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{mechanicEmail}}\",\n  \"password\": \"{{password}}\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/auth/login",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "auth",
+                "login"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Login con contraseña incorrecta",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('401: credenciales inválidas, sin token', () => {",
+                  "  pm.response.to.have.status(401);",
+                  "  pm.expect(pm.response.json().accessToken).to.be.undefined;",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{adminEmail}}\",\n  \"password\": \"clave-equivocada\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/auth/login",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "auth",
+                "login"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Perfil sin token",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('401: la API no responde datos sin sesión', () => pm.response.to.have.status(401));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/auth/me",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "auth",
+                "me"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Perfil con token (permisos efectivos)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 con el rol del inspector', () => {",
+                  "  pm.response.to.have.status(200);",
+                  "  pm.expect(pm.response.text()).to.include('INSPECTOR');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{inspectorToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/auth/me",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "auth",
+                "me"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "2. Permisos por rol (RBAC)",
+      "item": [
+        {
+          "name": "Inspector intenta crear un usuario",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('403: solo el administrador gestiona usuarios', () => pm.response.to.have.status(403));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{inspectorToken}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"no-deberia@uagrm.edu.bo\",\n  \"password\": \"taller123\",\n  \"name\": \"Prueba RBAC\",\n  \"role\": \"ADMIN\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/auth/register",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "auth",
+                "register"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Mecánico intenta crear un usuario",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('403: solo el administrador gestiona usuarios', () => pm.response.to.have.status(403));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{mechanicToken}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"no-deberia@uagrm.edu.bo\",\n  \"password\": \"taller123\",\n  \"name\": \"Prueba RBAC\",\n  \"role\": \"ADMIN\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/auth/register",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "auth",
+                "register"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Inspector consulta órdenes",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200: el inspector puede consultar órdenes', () => {",
+                  "  pm.response.to.have.status(200);",
+                  "  pm.expect(pm.response.json()).to.be.an('array');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{inspectorToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/work-orders",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "work-orders"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Administrador lista vehículos",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 y una lista de vehículos', () => {",
+                  "  pm.response.to.have.status(200);",
+                  "  const lista = pm.response.json();",
+                  "  pm.expect(lista).to.be.an('array').and.not.empty;",
+                  "  const prueba = lista.find((v) => v.vin === pm.environment.get('vinPrueba'));",
+                  "  if (prueba) pm.collectionVariables.set('vehicleId', prueba.id);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{adminToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/vehicles",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "vehicles"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "3. Escaneos (CU07 y CU08)",
+      "item": [
+        {
+          "name": "Escaneo de un VIN no registrado",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('400: no se registra un escaneo sin vehículo válido', () => pm.response.to.have.status(400));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{inspectorToken}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"vin\": \"ZZZZZZZZZZZZZZZZ9\",\n  \"dtcs\": [],\n  \"readinessStatus\": {\n    \"monitorsCompleted\": true\n  }\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/scans",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "scans"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Escaneo con VIN en conflicto",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('400: el VIN leído no corresponde al vehículo elegido', () => {",
+                  "  pm.response.to.have.status(400);",
+                  "  pm.expect(pm.response.text()).to.include('no corresponde');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{inspectorToken}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"vehicleId\": \"{{vehicleId}}\",\n  \"vin\": \"{{vinOtroVehiculo}}\",\n  \"dtcs\": [],\n  \"readinessStatus\": {\n    \"monitorsCompleted\": true\n  }\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/scans",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "scans"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Escaneo con fallas confirmadas (P0300 + P0301)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('201: escaneo registrado', () => pm.response.to.have.status(201));",
+                  "const b = pm.response.json();",
+                  "pm.test('Filtro determinístico: severidad CRITICAL', () => pm.expect(b.evaluation.severity).to.eql('CRITICAL'));",
+                  "pm.test('Requiere evaluación: se pide la hipótesis de IA', () => pm.expect(b.diagnosis.requested).to.eql(true));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{inspectorToken}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"vin\": \"{{vinPrueba}}\",\n  \"batteryVoltage\": 13.6,\n  \"complete\": true,\n  \"readinessStatus\": {\n    \"milOn\": true,\n    \"dtcCount\": 2,\n    \"monitorsCompleted\": true,\n    \"incompleteMonitors\": []\n  },\n  \"dtcs\": [\n    {\n      \"code\": \"P0300\",\n      \"type\": \"CONFIRMED\"\n    },\n    {\n      \"code\": \"P0301\",\n      \"type\": \"CONFIRMED\"\n    }\n  ],\n  \"notes\": \"Prueba automatizada de Postman/Newman\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/scans",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "scans"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "4. Órdenes de trabajo (CU13 a CU16)",
+      "item": [
+        {
+          "name": "Buscar la orden abierta del vehículo",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Existe una orden abierta para el vehículo con fallas', () => {",
+                  "  pm.response.to.have.status(200);",
+                  "  const abierta = pm.response",
+                  "    .json()",
+                  "    .find((o) => o.vehicle && o.vehicle.vin === pm.environment.get('vinPrueba') && ['OPEN', 'IN_PROGRESS'].includes(o.status));",
+                  "  pm.expect(abierta, 'orden abierta').to.exist;",
+                  "  pm.collectionVariables.set('orderId', abierta.id);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{adminToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/work-orders",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "work-orders"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Inspector intenta cerrar la orden",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('403: el inspector no cierra órdenes', () => pm.response.to.have.status(403));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{inspectorToken}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"status\": \"COMPLETED\",\n  \"resolution\": \"No debería poder cerrarla\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/work-orders/{{orderId}}/close",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "work-orders",
+                "{{orderId}}",
+                "close"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Mecánico intenta asignar la orden",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('403: solo el administrador asigna órdenes', () => pm.response.to.have.status(403));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{mechanicToken}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"assignedToId\": \"{{mechanicId}}\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/work-orders/{{orderId}}/assign",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "work-orders",
+                "{{orderId}}",
+                "assign"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Administrador asigna la orden al mecánico",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200: orden asignada al mecánico', () => {",
+                  "  pm.response.to.have.status(200);",
+                  "  pm.expect(pm.response.json().assignedToId).to.eql(pm.collectionVariables.get('mechanicId'));",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{adminToken}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"assignedToId\": \"{{mechanicId}}\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/work-orders/{{orderId}}/assign",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "work-orders",
+                "{{orderId}}",
+                "assign"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Mecánico cierra la orden como completada",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Orden cerrada como COMPLETED', () => {",
+                  "  pm.expect(pm.response.code).to.be.oneOf([200, 201]);",
+                  "  pm.expect(pm.response.json().status).to.eql('COMPLETED');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{mechanicToken}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"status\": \"COMPLETED\",\n  \"resolution\": \"Se reemplazaron bujías y bobina del cilindro 1 (prueba automatizada).\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/work-orders/{{orderId}}/close",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "work-orders",
+                "{{orderId}}",
+                "close"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Cerrar otra vez la misma orden",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('409: una orden cerrada no se vuelve a cerrar', () => pm.response.to.have.status(409));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{mechanicToken}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"status\": \"COMPLETED\",\n  \"resolution\": \"Segundo cierre\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/work-orders/{{orderId}}/close",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "work-orders",
+                "{{orderId}}",
+                "close"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Escaneo limpio tras la reparación",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('201: escaneo registrado', () => pm.response.to.have.status(201));",
+                  "const b = pm.response.json();",
+                  "pm.test('Severidad NONE, sin IA y sin orden nueva', () => {",
+                  "  pm.expect(b.evaluation.severity).to.eql('NONE');",
+                  "  pm.expect(b.diagnosis.requested).to.eql(false);",
+                  "  pm.expect(b.workOrderId).to.eql(null);",
+                  "});",
+                  "pm.test('El vehículo vuelve a OK', () => pm.expect(b.scan.vehicle.status).to.eql('OK'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{inspectorToken}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"vin\": \"{{vinPrueba}}\",\n  \"batteryVoltage\": 13.9,\n  \"complete\": true,\n  \"readinessStatus\": {\n    \"milOn\": false,\n    \"dtcCount\": 0,\n    \"monitorsCompleted\": true,\n    \"incompleteMonitors\": []\n  },\n  \"dtcs\": []\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/scans",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "scans"
+              ]
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

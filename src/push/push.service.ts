@@ -157,7 +157,10 @@ export class PushService {
       });
       if (!orden) return this.noEnviado('La orden de trabajo no existe.');
 
-      const roles = this.rolesCon(Permission.ORDER_READ);
+      // El aviso de orden nueva va a quien puede trabajarla (CU18: administrador
+      // y mecánico). Con `ORDER_READ` también le llegaba al inspector, que desde
+      // la ampliación de permisos consulta órdenes pero no las atiende.
+      const roles = this.rolesCon(Permission.ORDER_UPDATE_STATUS);
       const dispositivos = await this.prisma.device.findMany({
         where: { user: { active: true, role: { in: roles } } },
         select: { token: true },

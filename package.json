@@ -13,9 +13,12 @@
     "start:debug": "nest start --debug --watch",
     "start:prod": "node dist/main",
     "lint": "eslint \"{src,apps,libs,test}/**/*.ts\" --fix",
+    "lint:check": "eslint \"src/**/*.ts\"",
     "test": "jest",
     "test:watch": "jest --watch",
     "test:cov": "jest --coverage",
+    "test:api": "newman run postman/taller-api.postman_collection.json -e postman/local.postman_environment.json",
+    "test:api:prod": "newman run postman/taller-api.postman_collection.json -e postman/prod.postman_environment.json --folder \"1. Autenticación (CU01)\" --folder \"2. Permisos por rol (RBAC)\"",
     "seed:dev": "ts-node prisma/seed.ts",
     "migrate:dev": "ts-node prisma/migrate.ts",
     "ai:probe": "ts-node scripts/probe-ai.ts",
@@ -44,6 +47,7 @@
     "zod": "^4.6.7"
   },
   "devDependencies": {
+    "@eslint/js": "^9.39.5",
     "@nestjs/cli": "^12.0.0",
     "@nestjs/schematics": "^12.0.0",
     "@nestjs/testing": "^12.0.0",
@@ -56,6 +60,7 @@
     "dotenv": "^18.0.4",
     "eslint": "^9.0.0",
     "jest": "^29.7.0",
+    "newman": "^6.2.3",
     "prettier": "^3.4.0",
     "prisma": "^6.19.3",
     "source-map-support": "^0.5.21",
@@ -63,7 +68,8 @@
     "ts-loader": "^9.5.0",
     "ts-node": "^10.9.2",
     "tsconfig-paths": "^4.2.0",
-    "typescript": "^6.0.0"
+    "typescript": "^6.0.0",
+    "typescript-eslint": "^8.74.0"
   },
   "jest": {
     "moduleFileExtensions": [
