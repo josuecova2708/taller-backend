@@ -488,8 +488,8 @@
               "script": {
                 "type": "text/javascript",
                 "exec": [
-                  "pm.test('400: el VIN leído no corresponde al vehículo elegido', () => {",
-                  "  pm.response.to.have.status(400);",
+                  "pm.test('409: el VIN leído no corresponde al vehículo elegido', () => {",
+                  "  pm.response.to.have.status(409);",
                   "  pm.expect(pm.response.text()).to.include('no corresponde');",
                   "});"
                 ]
@@ -749,7 +749,10 @@
                 "exec": [
                   "pm.test('Orden cerrada como COMPLETED', () => {",
                   "  pm.expect(pm.response.code).to.be.oneOf([200, 201]);",
-                  "  pm.expect(pm.response.json().status).to.eql('COMPLETED');",
+                  "  pm.expect(pm.response.json().orden.status).to.eql('COMPLETED');",
+                  "});",
+                  "pm.test('Queda registrado quién la cerró', () => {",
+                  "  pm.expect(pm.response.json().orden.closedById).to.eql(pm.collectionVariables.get('mechanicId'));",
                   "});"
                 ]
               }
