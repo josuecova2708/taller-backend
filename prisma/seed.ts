@@ -596,7 +596,7 @@ async function main() {
       responsibleId: inspAgricolas.id,
     },
     create: {
-      vin: '5TFCZ5AN3MX255216',
+      vin: 'TESTTAC0000000001',
       plate: '5521-TAC',
       alias: 'Camioneta Prácticas Agrícolas Okinawa',
       make: 'Toyota',

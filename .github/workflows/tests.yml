@@ -3,6 +3,7 @@ name: Tests
 on: [push, pull_request]
 
 jobs:
+  # Pruebas unitarias (Jest) y análisis estático (ESLint).
   test:
     runs-on: ubuntu-latest
     steps:
@@ -13,4 +14,55 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npx prisma generate
+      - run: npm run lint:check
       - run: npm test
+
+  # Pruebas de API de caja negra: levanta el backend contra un PostgreSQL de
+  # prueba con los datos del seed y ejecuta la colección de Postman con Newman.
+  api:
+    runs-on: ubuntu-latest
+    needs: test
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: taller
+          POSTGRES_PASSWORD: taller
+          POSTGRES_DB: taller_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U taller"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql://taller:taller@localhost:5432/taller_ci
+      # Secreto solo para CI: cumple la validación de 32 caracteres.
+      JWT_SECRET: ci-only-secret-0123456789abcdef0123456789abcdef
+      AI_PROVIDER: mock
+      PORT: 3000
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npx prisma generate
+      - run: npm run migrate:dev
+      - run: npm run seed:dev
+      - run: npm run build
+      - name: Iniciar el backend
+        run: |
+          nohup node dist/main > backend.log 2>&1 &
+          for i in $(seq 1 30); do
+            if curl -s -o /dev/null http://localhost:3000/api/auth/me; then exit 0; fi
+            sleep 2
+          done
+          cat backend.log
+          exit 1
+      - run: npm run test:api
+      - name: Log del backend si algo falla
+        if: failure()
+        run: cat backend.log

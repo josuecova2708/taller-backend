@@ -637,7 +637,7 @@ export class WorkOrdersService {
     return task;
   }
 
-  async toggleTask(workOrderId: string, taskId: string, completed: boolean, actor: Actor) {
+  async toggleTask(workOrderId: string, taskId: string, completed: boolean, _actor: Actor) {
     const orden = await this.findOne(workOrderId);
     if (!ESTADOS_ABIERTOS.includes(orden.status)) {
       throw new ConflictException('No se pueden modificar tareas de una orden cerrada.');

@@ -139,7 +139,7 @@ export function leerCuentaServicio(
 
   let json: Record<string, unknown>;
   try {
-    json = JSON.parse(texto.replace(/^﻿/, ''));
+    json = JSON.parse(texto.replace(/^\uFEFF/, ''));
   } catch {
     throw new Error('FIREBASE_SERVICE_ACCOUNT no contiene un JSON válido');
   }

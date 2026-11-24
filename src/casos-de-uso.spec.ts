@@ -1,7 +1,7 @@
 // ============================================================================
 // Pruebas Unitarias Automatizadas basadas en Casos de Uso (CU)
 // Proyecto: Sistema IoT de Diagnóstico Vehicular Preventivo OBD-II con IA (UAGRM)
-// Mapeo directo para el documento de Taller de Grado (Capítulo 2.5.4 / Pruebas)
+// Mapeo directo para el documento de Taller de Grado (sección 3.5.4, Casos de Prueba)
 // ============================================================================
 
 // Mock de @nestjs/common para compatibilidad ts-jest en arquitectura ESM
@@ -44,12 +44,12 @@ import { prioridadDesdeSeveridad } from './work-orders/work-orders.service';
 import { resolverEstadoVehiculo } from './scans/vehicle-status';
 import { ScansService } from './scans/scans.service';
 
-describe('2.5.4 Pruebas Unitarias de Casos de Uso (Backend)', () => {
+describe('3.5.4 Pruebas Unitarias de Casos de Uso (Backend)', () => {
 
   // --------------------------------------------------------------------------
-  // CP-01 | CU01: Control de Acceso y Matriz de Permisos por Rol (RBAC)
+  // CP-01 | CU02 / CU14 / CU07: Control de Acceso y Matriz de Permisos por Rol (RBAC)
   // --------------------------------------------------------------------------
-  describe('CP-01 | CU01: Control de Acceso y Matriz de Permisos (RBAC)', () => {
+  describe('CP-01 | CU02 / CU14 / CU07: Control de Acceso y Matriz de Permisos (RBAC)', () => {
     it('debe permitir la gestión de usuarios exclusivamente al rol ADMIN', () => {
       expect(roleHasPermission(UserRole.ADMIN, Permission.USER_MANAGE)).toBe(true);
       expect(roleHasPermission(UserRole.MECHANIC, Permission.USER_MANAGE)).toBe(false);
@@ -76,9 +76,9 @@ describe('2.5.4 Pruebas Unitarias de Casos de Uso (Backend)', () => {
   });
 
   // --------------------------------------------------------------------------
-  // CP-02 | CU02: Validación de Identidad Vehicular y Detección de Conflictos (VIN)
+  // CP-02 | CU03: Validación de Identidad Vehicular y Detección de Conflictos (VIN)
   // --------------------------------------------------------------------------
-  describe('CP-02 | CU02: Validación de Identidad Vehicular y Detección de Conflictos', () => {
+  describe('CP-02 | CU03: Validación de Identidad Vehicular y Detección de Conflictos', () => {
     it('debe normalizar cadenas de VIN a mayúsculas y sin espacios residuales', () => {
       expect(normalizarVin('  1hgcr2f83ha123456  ')).toBe('1HGCR2F83HA123456');
       expect(normalizarVin(null)).toBeNull();
@@ -110,9 +110,9 @@ describe('2.5.4 Pruebas Unitarias de Casos de Uso (Backend)', () => {
   });
 
   // --------------------------------------------------------------------------
-  // CP-03 | CU03: Clasificación Determinística de Escaneos y Semáforo de Salud
+  // CP-03 | CU08: Clasificación Determinística de Escaneos y Semáforo de Salud
   // --------------------------------------------------------------------------
-  describe('CP-03 | CU03: Clasificación de Escaneo y Semáforo de Salud', () => {
+  describe('CP-03 | CU08: Clasificación de Escaneo y Semáforo de Salud', () => {
     let filterService: DeterministicFilterService;
 
     beforeEach(() => {
@@ -168,9 +168,9 @@ describe('2.5.4 Pruebas Unitarias de Casos de Uso (Backend)', () => {
   });
 
   // --------------------------------------------------------------------------
-  // CP-04 | CU04: Validación Estructural de Hipótesis Técnica de IA (Claude API)
+  // CP-04 | CU12: Validación Estructural de Hipótesis Técnica de IA (Claude API)
   // --------------------------------------------------------------------------
-  describe('CP-04 | CU04: Validación Estructural de Hipótesis Técnica con IA', () => {
+  describe('CP-04 | CU12: Validación Estructural de Hipótesis Técnica con IA', () => {
     it('debe validar satisfactoriamente un payload estructurado generado por Claude API', () => {
       const mockAiResponse = {
         summary:
@@ -207,9 +207,9 @@ describe('2.5.4 Pruebas Unitarias de Casos de Uso (Backend)', () => {
   });
 
   // --------------------------------------------------------------------------
-  // CP-05 | CU05: Ciclo de Vida y Transición de Órdenes de Trabajo
+  // CP-05 | CU15 / CU16: Ciclo de Vida y Transición de Órdenes de Trabajo
   // --------------------------------------------------------------------------
-  describe('CP-05 | CU05: Ciclo de Vida y Transición de Órdenes de Trabajo', () => {
+  describe('CP-05 | CU15 / CU16: Ciclo de Vida y Transición de Órdenes de Trabajo', () => {
     it('debe mapear directamente la severidad del escaneo a la prioridad de la orden', () => {
       expect(prioridadDesdeSeveridad(ScanSeverity.NONE)).toBe(WorkOrderPriority.LOW);
       expect(prioridadDesdeSeveridad(ScanSeverity.LOW)).toBe(WorkOrderPriority.LOW);

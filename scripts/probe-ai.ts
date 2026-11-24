@@ -27,7 +27,7 @@ const input: DiagnosisInput = {
     make: 'Toyota',
     model: 'Tacoma',
     year: 2021,
-    vin: '5TFCZ5AN3MX255216',
+    vin: 'TESTTAC0000000001',
   },
   scan: { scannedAt: new Date(), batteryVoltage: 13.3 },
   readiness: {
