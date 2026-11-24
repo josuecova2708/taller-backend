@@ -21,6 +21,12 @@ jest.mock('@nestjs/common', () => ({
 jest.mock('./prisma/prisma.service', () => ({ PrismaService: class {} }));
 jest.mock('./obd/vehicle-status.service', () => ({ VehicleStatusService: class {} }));
 jest.mock('./audit/audit.service', () => ({ AuditService: class {} }));
+jest.mock('./diagnosis/diagnosis.service', () => ({
+  DiagnosisService: class {},
+  VENTANA_HISTORIAL: 3,
+}));
+jest.mock('./n8n/n8n.service', () => ({ N8nService: class {} }));
+jest.mock('./push/push.service', () => ({ PushService: class {} }));
 
 import {
   UserRole,
@@ -36,6 +42,7 @@ import { DeterministicFilterService } from './obd/deterministic-filter.service';
 import { DiagnosisHypothesisSchema } from './ai/diagnosis.schema';
 import { prioridadDesdeSeveridad } from './work-orders/work-orders.service';
 import { resolverEstadoVehiculo } from './scans/vehicle-status';
+import { ScansService } from './scans/scans.service';
 
 describe('2.5.4 Pruebas Unitarias de Casos de Uso (Backend)', () => {
 
@@ -231,6 +238,118 @@ describe('2.5.4 Pruebas Unitarias de Casos de Uso (Backend)', () => {
       );
 
       expect(estadoActualizado).toBe(VehicleStatus.OK);
+    });
+  });
+
+  // --------------------------------------------------------------------------
+  // 9.3.1. Pruebas de caja negra — CU06: Ejecutar Escaneo OBD-II
+  // --------------------------------------------------------------------------
+  describe('Prueba de caja negra | CU06: Ejecutar Escaneo OBD-II', () => {
+    it('Prueba de CU06 Ejecutar Escaneo OBD-II: procesa la trama obtenida del ELM327 (VIN, voltaje, protocolo CAN, monitores y DTCs) y devuelve el resultado del escaneo', async () => {
+      // Precondición: El inspector autenticado seleccionó el vehículo 5521-TAC
+      // y ejecutó la secuencia de interrogación OBD-II con el adaptador ELM327.
+      const vehiculoRegistrado = {
+        id: 'veh-tacoma-5521',
+        plate: '5521-TAC',
+        vin: '5TFCZ5AN3MX255216',
+        active: true,
+        status: VehicleStatus.OK,
+      };
+
+      const prismaMock = {
+        vehicle: {
+          findUnique: jest.fn().mockResolvedValue(vehiculoRegistrado),
+          update: jest.fn().mockResolvedValue({
+            ...vehiculoRegistrado,
+            status: VehicleStatus.CRITICAL,
+          }),
+        },
+        scan: {
+          findMany: jest.fn().mockResolvedValue([]),
+          create: jest.fn().mockImplementation(({ data }) =>
+            Promise.resolve({
+              id: 'scan-cu06-001',
+              ...data,
+              vehicle: vehiculoRegistrado,
+              dtcEntries: [
+                { id: 'dtc-1', code: 'P0300', type: DtcType.CONFIRMED },
+                { id: 'dtc-2', code: 'P0301', type: DtcType.CONFIRMED },
+                { id: 'dtc-3', code: 'P0300', type: DtcType.PERMANENT },
+                { id: 'dtc-4', code: 'P0301', type: DtcType.PERMANENT },
+              ],
+            }),
+          ),
+        },
+        workOrder: {
+          findFirst: jest.fn().mockResolvedValue(null),
+        },
+      };
+
+      const filterService = new DeterministicFilterService();
+      const diagnosisMock = { processScan: jest.fn().mockResolvedValue(undefined) };
+      const workOrdersMock = {
+        createOrUpdateForScan: jest.fn().mockResolvedValue({
+          orden: { id: 'wo-cu06-001' },
+          creada: true,
+        }),
+        countOpenByVehicle: jest.fn().mockResolvedValue(1),
+      };
+      const n8nMock = { notificarAlerta: jest.fn().mockResolvedValue(undefined) };
+      const pushMock = { notificarOrden: jest.fn().mockResolvedValue(undefined) };
+
+      const scansService = new ScansService(
+        prismaMock as any,
+        filterService,
+        diagnosisMock as any,
+        workOrdersMock as any,
+        n8nMock as any,
+        pushMock as any,
+      );
+
+      // Entrada: Trama estructurada producto de la ejecución del escaneo OBD-II
+      // (ATZ, ATE0, ATSP0, 0100, ATDPN -> ISO 15765-4 CAN, ATRV -> 13.3V,
+      //  0902 -> VIN, 0101 -> Readiness, Modos 03/07/0A -> P0300 y P0301).
+      const entradaEscaneoObd = {
+        vehicleId: 'veh-tacoma-5521',
+        vin: '5TFCZ5AN3MX255216',
+        batteryVoltage: 13.3,
+        complete: true,
+        protocol: {
+          number: '6',
+          automatic: true,
+          isCan: true,
+          label: 'ISO 15765-4 CAN (11 bit, 500 kbaud)',
+          raw: 'A6',
+        },
+        readinessStatus: {
+          milOn: true,
+          dtcCount: 2,
+          monitorsCompleted: true,
+          incompleteMonitors: [],
+          compressionIgnition: false,
+          rawHex: '41 01 82 07 65 00',
+        },
+        dtcs: [
+          { code: 'P0300', type: DtcType.CONFIRMED },
+          { code: 'P0301', type: DtcType.CONFIRMED },
+          { code: 'P0300', type: DtcType.PERMANENT },
+          { code: 'P0301', type: DtcType.PERMANENT },
+        ],
+      };
+
+      // Condición de ejecución: Se procesa el escaneo ejecutado por el inspector.
+      const resultado = await scansService.create(
+        entradaEscaneoObd as any,
+        'inspector-fca-001',
+      );
+
+      // Resultado Esperado / Obtenido:
+      expect(resultado.scan.id).toBe('scan-cu06-001');
+      expect(resultado.scan.batteryVoltage).toBe(13.3);
+      expect(resultado.scan.dtcEntries).toHaveLength(4);
+      expect(resultado.evaluation.severity).toBe(ScanSeverity.CRITICAL);
+      expect(resultado.scan.vehicle.status).toBe(VehicleStatus.CRITICAL);
+      expect(resultado.workOrderId).toBe('wo-cu06-001');
     });
   });
 });
